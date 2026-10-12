@@ -1,9 +1,14 @@
+from contextlib import nullcontext
+from pathlib import Path
+
 import pytest
 
+import app.adapters.warehouse.postgres_catalog as catalog_module
 from app.adapters.warehouse.postgres import (
     PostgresWarehouseAdapter,
     UnsafeWarehouseQuery,
 )
+from app.adapters.warehouse.postgres_catalog import PostgresCatalogAdapter
 from app.core.types import ValidatedQuery
 
 
@@ -41,3 +46,28 @@ def test_adapter_enforces_configured_row_cap() -> None:
             ValidatedQuery(sql="SELECT 1", parameters={}),
             max_rows=26,
         )
+
+
+def test_catalog_adapter_uses_a_private_temporary_ca_file(monkeypatch) -> None:
+    certificate = "-----BEGIN CERTIFICATE-----\nlocal-test\n-----END CERTIFICATE-----\n"
+    created_paths: list[Path] = []
+
+    def connect(conninfo: str):
+        from psycopg.conninfo import conninfo_to_dict
+
+        path = Path(conninfo_to_dict(conninfo)["sslrootcert"])
+        assert path.read_text(encoding="utf-8") == certificate
+        assert path.stat().st_mode & 0o077 == 0
+        created_paths.append(path)
+        return nullcontext(object())
+
+    monkeypatch.setattr(catalog_module.psycopg, "connect", connect)
+    catalog = PostgresCatalogAdapter(
+        "host=localhost dbname=demo",
+        ssl_ca_certificate=certificate,
+    )
+
+    with catalog._connect():
+        assert created_paths[0].exists()
+
+    assert not created_paths[0].exists()

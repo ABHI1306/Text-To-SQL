@@ -20,6 +20,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refreshSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me": {
         parameters: {
             query?: never;
@@ -30,6 +78,22 @@ export interface paths {
         get: operations["getMe"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connections/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testConnection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -52,12 +116,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSetupState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/catalog/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listCatalogTables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/selected-tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["saveSelectedTables"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/introspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["introspectProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/mdl": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                project_id: string;
+                project_id: components["parameters"]["ProjectId"];
             };
             cookie?: never;
         };
@@ -79,6 +215,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Planned contract; thread persistence is not part of Day 2. */
         post: operations["createThread"];
         delete?: never;
         options?: never;
@@ -97,6 +234,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Planned contract; question execution is not part of Day 2. */
         post: operations["askQuestion"];
         delete?: never;
         options?: never;
@@ -113,10 +251,64 @@ export interface components {
             /** Format: password */
             password: string;
         };
-        LoginResponse: {
+        AuthResponse: {
             access_token: string;
             /** @constant */
             token_type: "bearer";
+            expires_in: number;
+            must_change_password: boolean;
+        };
+        ChangePasswordRequest: {
+            /** Format: password */
+            currentPassword: string;
+            /** Format: password */
+            newPassword: string;
+        };
+        ConnectionRequest: {
+            displayName: string;
+            host: string;
+            /** @default 5432 */
+            port: number;
+            username: string;
+            /** Format: password */
+            password: string;
+            database: string;
+            /** @default false */
+            ssl: boolean;
+            sslCaCertificate?: string | null;
+        };
+        Project: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            setup_step?: "connect" | "tables" | "relationships" | "complete";
+        };
+        CatalogTable: {
+            schema: string;
+            table: string;
+            approx_rows: number;
+            column_count: number;
+        };
+        SelectedTable: {
+            schema: string;
+            table: string;
+        };
+        ProfiledDraft: {
+            mdl: components["schemas"]["MdlDocument"];
+            tables: {
+                schema_name: string;
+                table_name: string;
+                row_count: number;
+                sample_rows: {
+                    [key: string]: unknown;
+                }[];
+            }[];
+            summary: {
+                selected_tables: number;
+                total_rows: number;
+                models_needing_review: string[];
+            };
         };
         Me: {
             /** Format: uuid */
@@ -125,22 +317,33 @@ export interface components {
             role: string;
             capabilities: string[];
             projects: components["schemas"]["Project"][];
+            must_change_password: boolean;
         };
-        Project: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-        };
-        Mdl: {
-            /** Format: uuid */
-            project_id: string;
+        MdlDocument: {
+            /** @default 3 */
             version: number;
+            /** @default postgresql */
+            dialect: string;
             models: {
                 [key: string]: unknown;
             }[];
-            relationships: {
+            relationships?: {
                 [key: string]: unknown;
             }[];
+            metrics?: {
+                [key: string]: unknown;
+            }[];
+            instructions?: string[];
+            layout?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+        };
+        Mdl: components["schemas"]["MdlDocument"] & {
+            /** Format: uuid */
+            project_id: string;
+            revision: number;
         };
         Thread: {
             /** Format: uuid */
@@ -150,12 +353,12 @@ export interface components {
             title: string;
         };
         Error: {
-            code: string;
-            message: string;
+            /** @description FastAPI error detail. */
+            detail?: string | Record<string, never>;
         };
     };
     responses: {
-        /** @description Request failed */
+        /** @description Request failed. */
         Error: {
             headers: {
                 [name: string]: unknown;
@@ -165,7 +368,9 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        ProjectId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -185,16 +390,81 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Local account login */
+            /** @description Login succeeded; refresh token is set in an HttpOnly cookie. */
             200: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LoginResponse"];
+                    "application/json": components["schemas"]["AuthResponse"];
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    refreshSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rotated refresh token and issued a new access token. */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Refresh session revoked and cookie cleared. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Password changed and other refresh sessions revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     getMe: {
@@ -206,7 +476,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Signed-in account profile and capabilities */
+            /** @description Signed-in account profile, capabilities, and accessible projects. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -216,6 +486,35 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    testConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Read-only connection verified. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        server_version: string;
+                        latency_ms: number;
+                    };
+                };
+            };
+            422: components["responses"]["Error"];
         };
     };
     listProjects: {
@@ -227,7 +526,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Projects available to the current account */
+            /** @description Projects available to the current account. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -249,13 +548,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    name: string;
-                };
+                "application/json": components["schemas"]["ConnectionRequest"];
             };
         };
         responses: {
-            /** @description Project created */
+            /** @description Connection tested and project credentials encrypted before saving. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -264,6 +561,124 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
+            422: components["responses"]["Error"];
+        };
+    };
+    getSetupState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current setup step and saved table selection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        project_id: string;
+                        /** @enum {string} */
+                        step: "connect" | "tables" | "relationships" | "complete";
+                        selected_tables: components["schemas"]["SelectedTable"][];
+                    };
+                };
+            };
+        };
+    };
+    listCatalogTables: {
+        parameters: {
+            query?: {
+                search?: string;
+                schema?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated catalog table list. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CatalogTable"][];
+                        page: number;
+                        page_size: number;
+                        total: number;
+                    };
+                };
+            };
+        };
+    };
+    saveSelectedTables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    tables: components["schemas"]["SelectedTable"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Unique, existing tables selected for profiling. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        project_id: string;
+                        step: string;
+                        selected_count: number;
+                    };
+                };
+            };
+        };
+    };
+    introspectProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Catalog profile and reviewable semantic model draft. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfiledDraft"];
+                };
+            };
+            502: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getMdl: {
@@ -271,13 +686,13 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                project_id: string;
+                project_id: components["parameters"]["ProjectId"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Draft semantic model */
+            /** @description Latest saved semantic model and revision. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -293,17 +708,17 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                project_id: string;
+                project_id: components["parameters"]["ProjectId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Mdl"];
+                "application/json": components["schemas"]["MdlDocument"];
             };
         };
         responses: {
-            /** @description Draft model saved */
+            /** @description Validated semantic model saved as a new revision. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -312,6 +727,7 @@ export interface operations {
                     "application/json": components["schemas"]["Mdl"];
                 };
             };
+            422: components["responses"]["Error"];
         };
     };
     createThread: {
@@ -330,7 +746,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Thread created */
+            /** @description Thread created. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -358,18 +774,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Placeholder response for the streaming ask contract */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @constant */
-                        status: "not_implemented";
-                    };
-                };
-            };
             501: components["responses"]["Error"];
         };
     };

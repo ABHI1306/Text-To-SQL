@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:mock": "concurrently -k \"node mock-api.mjs\" \"vite --host 127.0.0.1 --port 4173 --strictPort\"",
+    "dev:mock": "concurrently -k \"node mock-api.mjs\" \"vite --mode mock --host 127.0.0.1 --port 4173 --strictPort\"",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",

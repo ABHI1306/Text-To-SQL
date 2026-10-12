@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 
 import { hasCapability } from './api/access'
 import type { components } from './api/schema'
+import { SetupWizard } from './SetupWizard'
 import './App.css'
 
 type Me = components['schemas']['Me']
+type AuthResponse = components['schemas']['AuthResponse']
 type Page =
   | 'Home'
   | 'Dashboards'
@@ -85,6 +87,15 @@ const setupSteps = ['Choose source', '1 Connect', '2 Tables', '3 Relationships']
 function App() {
   const [profile, setProfile] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [mustChangePassword, setMustChangePassword] = useState(false)
+  const [loginUsername, setLoginUsername] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [connectionDraft, setConnectionDraft] = useState<
+    Partial<components['schemas']['ConnectionRequest']>
+  >({})
   const [activePage, setActivePage] = useState<Page>('Home')
   const [activeThread, setActiveThread] = useState(threads[0])
   const [query, setQuery] = useState('')
@@ -105,22 +116,131 @@ function App() {
   useEffect(() => {
     let active = true
 
-    fetch('/api/v1/me')
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Profile request failed (${response.status})`)
-        return (await response.json()) as Me
-      })
-      .then((account) => {
-        if (active) setProfile(account)
-      })
-      .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Profile request failed')
-      })
+    async function restoreSession() {
+      try {
+        const response = await fetch('/api/v1/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        })
+        if (!response.ok) {
+          if (active) setAuthReady(true)
+          return
+        }
+        const auth = (await response.json()) as AuthResponse
+        if (!active) return
+        setAccessToken(auth.access_token)
+        setMustChangePassword(auth.must_change_password)
+        setAuthReady(true)
+        if (!auth.must_change_password) {
+          setProfile(await loadProfile(auth.access_token))
+        }
+      } catch (reason: unknown) {
+        if (active) {
+          setError(reason instanceof Error ? reason.message : 'Session restore failed')
+          setAuthReady(true)
+        }
+      }
+    }
+    void restoreSession()
 
     return () => {
       active = false
     }
   }, [])
+
+  async function loadProfile(token: string): Promise<Me> {
+    const response = await fetch('/api/v1/me', {
+      headers: { authorization: `Bearer ${token}` },
+      credentials: 'include',
+    })
+    if (!response.ok) throw new Error(`Profile request failed (${response.status})`)
+    return (await response.json()) as Me
+  }
+
+  const restoreAccessToken = useCallback(async (): Promise<AuthResponse | null> => {
+    const response = await fetch('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!response.ok) return null
+    const auth = (await response.json()) as AuthResponse
+    setAccessToken(auth.access_token)
+    setMustChangePassword(auth.must_change_password)
+    return auth
+  }, [])
+
+  const apiRequest = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const perform = (token: string | null) => {
+      const headers = new Headers(init.headers)
+      if (token) headers.set('authorization', `Bearer ${token}`)
+      return fetch(path, { ...init, headers, credentials: 'include' })
+    }
+    let response = await perform(accessToken)
+    if (response.status === 401) {
+      const renewed = await restoreAccessToken()
+      if (renewed) {
+        response = await perform(renewed.access_token)
+      } else {
+        setAccessToken(null)
+        setProfile(null)
+        setSessionExpired(true)
+      }
+    }
+    return response
+  }, [accessToken, restoreAccessToken])
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError(null)
+    try {
+      const response = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      })
+      if (!response.ok) throw new Error('Invalid username or password')
+      const auth = (await response.json()) as AuthResponse
+      setAccessToken(auth.access_token)
+      setMustChangePassword(auth.must_change_password)
+      setSessionExpired(false)
+      if (auth.must_change_password) return
+      setLoginPassword('')
+      setProfile(await loadProfile(auth.access_token))
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Sign in failed')
+    }
+  }
+
+  async function changeTemporaryPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!accessToken) return
+    setError(null)
+    try {
+      const response = await fetch('/api/v1/auth/change-password', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          currentPassword: loginPassword,
+          newPassword,
+        }),
+      })
+      if (!response.ok) {
+        const failure = (await response.json()) as { detail?: string }
+        throw new Error(failure.detail ?? 'Could not change the temporary password')
+      }
+      setMustChangePassword(false)
+      setLoginPassword('')
+      setNewPassword('')
+      setProfile(await loadProfile(accessToken))
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Password change failed')
+    }
+  }
 
   const visibleNavigation = useMemo(
     () => navigation.filter(({ capability }) => hasCapability(profile?.capabilities ?? [], capability)),
@@ -135,7 +255,7 @@ function App() {
     setActiveThread(trimmed)
     setNotice('This is a design preview. The live question pipeline is not connected yet.')
     try {
-      await fetch('/api/v1/threads/6b8b4567-e89b-12d3-a456-426614174002/ask', {
+      await apiRequest('/api/v1/threads/6b8b4567-e89b-12d3-a456-426614174002/ask', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ question: trimmed }),
@@ -153,6 +273,79 @@ function App() {
 
   const selectedProject = profile?.projects[0]?.name ?? 'Loading project'
   const username = profile?.username ?? 'Loading account'
+
+  if (!authReady) {
+    return <main className="auth-page" aria-live="polite">Checking local session…</main>
+  }
+
+  if (!profile) {
+    return (
+      <main className="auth-page">
+        <form
+          className="auth-card"
+          onSubmit={mustChangePassword ? changeTemporaryPassword : signIn}
+        >
+          <span className="brand-mark">A</span>
+          <p className="auth-eyebrow">LOCAL TEXT-TO-SQL WORKSPACE</p>
+          <h1>{mustChangePassword ? 'Set your new password' : 'Welcome back'}</h1>
+          <p className="auth-description">
+            {mustChangePassword
+              ? 'Change the initial temporary password before using the workspace.'
+              : 'Sign in to your local project workspace.'}
+          </p>
+          {!mustChangePassword && (
+            <>
+              <label>Username
+                <input
+                  autoComplete="username"
+                  onChange={(event) => setLoginUsername(event.target.value)}
+                  required
+                  value={loginUsername}
+                />
+              </label>
+              <label>Password
+                <input
+                  autoComplete="current-password"
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={loginPassword}
+                />
+              </label>
+            </>
+          )}
+          {mustChangePassword && (
+            <>
+              <label>Temporary password
+                <input
+                  autoComplete="current-password"
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={loginPassword}
+                />
+              </label>
+              <label>New password
+                <input
+                  autoComplete="new-password"
+                  minLength={12}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  required
+                  type="password"
+                  value={newPassword}
+                />
+              </label>
+            </>
+          )}
+          {error && <p className="auth-error" role="alert">{error}</p>}
+          {sessionExpired && <p className="auth-error" role="status">Your session expired. Sign in again.</p>}
+          <button className="auth-submit" type="submit">
+            {mustChangePassword ? 'Change password' : 'Sign in'}
+          </button>
+        </form>
+      </main>
+    )
+  }
 
   return (
     <div
@@ -243,50 +436,51 @@ function App() {
           </div>
         )}
         {activePage === 'Setup' && (
-          <div className="review-state-note" role="status">Setup step preview: {setupStep}. The setup workflow is not implemented yet.</div>
+          <div className="review-state-note" role="status">Design focus: {setupStep}. The live setup workflow is below.</div>
         )}
       </div>
-      <aside className="product-sidebar">
-        <a className="brand" href="/" aria-label="Amazatic home">
-          <span className="brand-mark">A</span>
-          <span>Amazatic</span>
-        </a>
-        <button className="project-switcher" type="button">
-          <span className="project-switcher-name">{selectedProject}</span>
-          <span className="model-version">v3 active</span>
-          <small>acme_prod · PostgreSQL 16</small>
-        </button>
-        <nav className="product-nav" aria-label="Main navigation">
-          {(['ASK', 'WORK', 'ADMIN'] as const).map((group) => {
-            const items = visibleNavigation.filter((item) => item.group === group)
-            if (!items.length) return null
-            return (
-              <div className="nav-group" key={group}>
-                <span className="nav-group-label">{group}</span>
-                {items.map(({ page }) => (
-                  <button
-                    className={`product-nav-item${activePage === page ? ' active' : ''}`}
-                    key={page}
-                    onClick={() => setActivePage(page)}
-                    type="button"
-                  >
-                    <NavGlyph page={page} />
-                    <span>{page}</span>
-                  </button>
-                ))}
-              </div>
-            )
-          })}
-        </nav>
-        <button className="profile-button" type="button">
-          <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
-          <span className="profile-copy"><strong>{username}</strong><small>{profile?.role ?? '…'}</small></span>
-          <span className="profile-role">{profile?.role === 'DBA' ? 'DBA' : profile?.role ?? '…'}</span>
-        </button>
-      </aside>
+      <div className="app-shell">
+        <aside className="product-sidebar">
+          <a className="brand" href="/" aria-label="Amazatic home">
+            <span className="brand-mark">A</span>
+            <span>Amazatic</span>
+          </a>
+          <button className="project-switcher" type="button">
+            <span className="project-switcher-name">{selectedProject}</span>
+            <span className="model-version">v3 active</span>
+            <small>acme_prod · PostgreSQL 16</small>
+          </button>
+          <nav className="product-nav" aria-label="Main navigation">
+            {(['ASK', 'WORK', 'ADMIN'] as const).map((group) => {
+              const items = visibleNavigation.filter((item) => item.group === group)
+              if (!items.length) return null
+              return (
+                <div className="nav-group" key={group}>
+                  <span className="nav-group-label">{group}</span>
+                  {items.map(({ page }) => (
+                    <button
+                      className={`product-nav-item${activePage === page ? ' active' : ''}`}
+                      key={page}
+                      onClick={() => setActivePage(page)}
+                      type="button"
+                    >
+                      <NavGlyph page={page} />
+                      <span>{page}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+          </nav>
+          <button className="profile-button" type="button">
+            <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
+            <span className="profile-copy"><strong>{username}</strong><small>{profile?.role ?? '…'}</small></span>
+            <span className="profile-role">{profile?.role === 'DBA' ? 'DBA' : profile?.role ?? '…'}</span>
+          </button>
+        </aside>
 
-      {activePage === 'Home' ? (
-        <main className={`workspace${traceVisible ? '' : ' trace-collapsed'}`}>
+        {activePage === 'Home' ? (
+          <main className={`workspace${traceVisible ? '' : ' trace-collapsed'}`}>
           <header className="workspace-topbar">
             <button className="icon-button menu-button" type="button" aria-label="Toggle navigation">☰</button>
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>Home</span></div>
@@ -454,9 +648,29 @@ function App() {
               </div>
             </section>
           </div>
-        </main>
-      ) : (
-        <main className="placeholder-main">
+          </main>
+        ) : activePage === 'Setup' || activePage === 'Connect and model' ? (
+          <main className="placeholder-main">
+          <header className="workspace-topbar">
+            <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
+            <span className="local-status"><i />Local only · PostgreSQL</span>
+          </header>
+          <SetupWizard
+            apiRequest={apiRequest}
+            draft={connectionDraft}
+            existingProject={profile.projects[0]}
+            onDraftChange={setConnectionDraft}
+            onProjectCreated={() => {
+              if (accessToken) {
+                void loadProfile(accessToken).then(setProfile).catch((reason: unknown) => {
+                  setError(reason instanceof Error ? reason.message : 'Could not reload project')
+                })
+              }
+            }}
+          />
+          </main>
+        ) : (
+          <main className="placeholder-main">
           <header className="workspace-topbar">
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
             <span className="local-status"><i />Local only · acme-db-01.internal</span>
@@ -467,8 +681,9 @@ function App() {
             <p>This screen is part of the design reference. Its feature workflow will be implemented in a later task.</p>
             <button className="primary-action" onClick={() => setActivePage('Home')} type="button">Return to Home</button>
           </section>
-        </main>
-      )}
+          </main>
+        )}
+      </div>
     </div>
   )
 }

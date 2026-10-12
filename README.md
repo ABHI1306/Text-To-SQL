@@ -13,12 +13,35 @@ and Ollama for local model testing.
 ```bash
 cp .env.example .env
 uv sync
-docker compose --env-file .env up -d --build
-docker compose --env-file .env --profile tools run --rm migrate
 ```
 
-The `.env.example` values are development-only placeholders. Replace them before
-sharing the machine or exposing any port to a network. Do not commit `.env`.
+The `.env.example` values are development-only placeholders. Before starting, generate
+a strong `JWT_SECRET` (at least 32 characters) and a Fernet key for
+`CONNECTION_ENCRYPTION_KEY`, then set both in `.env`:
+
+```bash
+openssl rand -hex 32
+uv run -- python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Also set a temporary `BOOTSTRAP_DBA_PASSWORD` with at least 12 characters. Replace the
+database placeholder passwords before sharing the machine or exposing any port to a
+network. Do not commit `.env`. Non-development API startup refuses missing or invalid
+JWT/encryption secrets.
+
+The bootstrap command creates the initial local DBA account and forces a password
+change at first sign-in. After it succeeds, remove `BOOTSTRAP_DBA_PASSWORD` from `.env`
+and recreate the API container. Create/reset local accounts with `make user-create
+USERNAME=analyst` and `make user-reset-dba USERNAME=analyst`; both commands prompt for
+the temporary password without echoing it.
+
+Then start the services, apply migrations, and create the first DBA:
+
+```bash
+docker compose --env-file .env up -d --build
+docker compose --env-file .env --profile tools run --rm migrate
+make user-bootstrap-dba
+```
 
 The Compose network is internal to the local stack. The Compose-managed Ollama volume
 starts empty; model weights are not downloaded automatically. The smoke harness below
@@ -61,16 +84,24 @@ running, the Day 1 outbound-connectivity check is:
 ./scripts/test-egress.sh
 ```
 
-## UI against the mock API
+## UI
 
 ```bash
 cd ui
 npm run generate:api
+npm run dev
+```
+
+To use the mock account and fixtures instead, run:
+
+```bash
 npm run dev:mock
 ```
 
-Open <http://127.0.0.1:4173>. The local mock account and project are fixtures, not real
-authentication or database access. The OpenAPI contract is in `docs/openapi.yaml`.
+Open <http://127.0.0.1:4173>. The Vite dev server defaults to the real local API at
+`http://127.0.0.1:8000`; set `VITE_API_PROXY_TARGET` to override it. The mock account,
+database catalog, and model descriptions are fixtures, not real authentication or
+database access. The OpenAPI contract is in `docs/openapi.yaml`.
 
 ## Day 1 model smoke check
 
@@ -95,3 +126,14 @@ checkpoint remains open. The schema smoke results do not by themselves justify a
 model selection; see
 `docs/DECISIONS.md` and the dated reports in `reports/`. Execution accuracy is a later
 evaluation gate and requires the compiler path and golden set.
+
+## Day 2 progress
+
+The semantic-model domain, read-only catalog profiling, encrypted project connection
+storage, setup APIs, and local authentication are implemented. The UI includes
+first-login/password-change flows and a setup wizard to test a connection, select and
+profile tables, and validate/save an editable MDL. Refresh tokens are rotated in an
+HttpOnly cookie; access tokens remain in browser memory. Profiling samples redact
+common sensitive columns. Local Ollama description generation still needs to be run
+against an installed model, and the DBA should review/correct descriptions for five
+important tables before Day 2 is marked complete.

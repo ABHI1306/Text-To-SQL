@@ -1,0 +1,1 @@
+"""Validated business-domain models."""
