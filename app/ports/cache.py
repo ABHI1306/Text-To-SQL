@@ -1,0 +1,9 @@
+from typing import Protocol
+
+
+class CachePort(Protocol):
+    def get(self, key: str) -> bytes | None: ...
+
+    def set(self, key: str, value: bytes, *, ttl_seconds: int) -> None: ...
+
+    def delete(self, key: str) -> None: ...

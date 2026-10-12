@@ -1,0 +1,132 @@
+services:
+  metadata-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: metadata
+      POSTGRES_USER: metadata_admin
+      POSTGRES_PASSWORD: ${METADATA_ADMIN_PASSWORD:?Set METADATA_ADMIN_PASSWORD in .env}
+      METADATA_APP_PASSWORD: ${METADATA_APP_PASSWORD:?Set METADATA_APP_PASSWORD in .env}
+    ports:
+      - "${METADATA_HOST_PORT:-55432}:5432"
+    volumes:
+      - metadata-data:/var/lib/postgresql/data
+      - ./scripts/db/init-metadata.sql:/docker-entrypoint-initdb.d/10-init-metadata.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metadata_admin -d metadata"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [local]
+
+  demo-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo_admin
+      POSTGRES_PASSWORD: ${DEMO_ADMIN_PASSWORD:?Set DEMO_ADMIN_PASSWORD in .env}
+      WAREHOUSE_READER_PASSWORD: ${WAREHOUSE_READER_PASSWORD:?Set WAREHOUSE_READER_PASSWORD in .env}
+    ports:
+      - "${DEMO_HOST_PORT:-55433}:5432"
+    volumes:
+      - demo-data:/var/lib/postgresql/data
+      - ./scripts/db/init-demo.sql:/docker-entrypoint-initdb.d/10-init-demo.sql:ro
+      - ./scripts/db/grants.sql:/docker-entrypoint-initdb.d/grants.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo_admin -d demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [local]
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks: [local]
+
+  ollama:
+    image: ollama/ollama:0.12.6
+    volumes:
+      - ollama-data:/root/.ollama
+    networks: [local]
+
+  api:
+    build:
+      context: .
+      target: base
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
+      METADATA_DATABASE_URL: postgresql+psycopg://text2sql_app:${METADATA_APP_PASSWORD}@metadata-db:5432/metadata
+      WAREHOUSE_DSN: host=demo-db dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}
+      WAREHOUSE_STATEMENT_TIMEOUT_MS: ${WAREHOUSE_STATEMENT_TIMEOUT_MS:-10000}
+      WAREHOUSE_MAX_ROWS: ${WAREHOUSE_MAX_ROWS:-1000}
+    ports:
+      - "8000:8000"
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      demo-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [local]
+
+  worker:
+    build:
+      context: .
+      target: base
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.worker"]
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+    networks: [local]
+
+  migrate:
+    build:
+      context: .
+      target: base
+    profiles: ["tools"]
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
+    environment:
+      METADATA_MIGRATION_URL: postgresql+psycopg://metadata_admin:${METADATA_ADMIN_PASSWORD}@metadata-db:5432/metadata
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+    networks: [local]
+
+  tests:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    command: ["uv", "run", "--no-sync", "pytest", "-q"]
+    environment:
+      WAREHOUSE_DSN: host=demo-db dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}
+      METADATA_APP_DSN: host=metadata-db dbname=metadata user=text2sql_app password=${METADATA_APP_PASSWORD}
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      demo-db:
+        condition: service_healthy
+    networks: [local]
+
+volumes:
+  metadata-data:
+  demo-data:
+  qdrant-data:
+  ollama-data:
+
+networks:
+  local:
+    internal: true

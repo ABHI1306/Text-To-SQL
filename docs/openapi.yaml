@@ -1,0 +1,261 @@
+openapi: 3.1.0
+info:
+  title: Text-to-SQL Platform API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Local account login
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+  /me:
+    get:
+      operationId: getMe
+      responses:
+        "200":
+          description: Signed-in account profile and capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Error"
+  /projects:
+    get:
+      operationId: listProjects
+      responses:
+        "200":
+          description: Projects available to the current account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /projects/{project_id}/mdl:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getMdl
+      responses:
+        "200":
+          description: Draft semantic model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mdl"
+    put:
+      operationId: saveMdl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Mdl"
+      responses:
+        "200":
+          description: Draft model saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mdl"
+  /threads:
+    post:
+      operationId: createThread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: Thread created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Thread"
+  /threads/{thread_id}/ask:
+    parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: askQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+      responses:
+        "200":
+          description: Placeholder response for the streaming ask contract
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: not_implemented
+        "501":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+    LoginResponse:
+      type: object
+      required: [access_token, token_type]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          const: bearer
+    Me:
+      type: object
+      required: [user_id, username, role, capabilities, projects]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        role:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+    Project:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    Mdl:
+      type: object
+      required: [project_id, version, models, relationships]
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        models:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        relationships:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    Thread:
+      type: object
+      required: [id, project_id, title]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+  responses:
+    Error:
+      description: Request failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+security:
+  - bearerAuth: []

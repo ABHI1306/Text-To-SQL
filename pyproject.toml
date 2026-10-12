@@ -1,0 +1,65 @@
+[project]
+name = "text2sql"
+version = "0.1.0"
+description = "Local-only Text-to-SQL platform"
+requires-python = ">=3.11"
+
+dependencies = [
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.7.0",
+  "psycopg[binary]>=3.1.0",
+  "sqlglot>=24.0.0",
+  "httpx>=0.27.0",
+  "structlog>=24.2.0",
+  "sqlalchemy>=2.1.4",
+  "alembic>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  "pre-commit>=3.0.0",
+  "import-linter>=2.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "Ports never depend on adapters"
+type = "forbidden"
+source_modules = ["app.ports"]
+forbidden_modules = ["app.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "Core remains independent of infrastructure"
+type = "forbidden"
+source_modules = ["app.core"]
+forbidden_modules = ["app.ports", "app.adapters", "app.api"]
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "ruff>=0.17.0",
+]
