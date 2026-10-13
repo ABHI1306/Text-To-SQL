@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TypeAlias, cast
 from uuid import uuid4
@@ -30,7 +31,7 @@ class PostgresMetadataRepository:
                 """
                 SELECT users.id, users.username, roles.name AS role_name,
                        users.password_hash, users.status, users.must_change_password,
-                       users.locked_until
+                       users.locked_until, users.auth_source
                 FROM users JOIN roles ON roles.id = users.role_id
                 WHERE lower(users.username) = %s
                 """,
@@ -827,6 +828,116 @@ class PostgresMetadataRepository:
                 ],
             )
 
+    # ------------------------------------------------------------------ identity
+
+    def list_identity_mappings(self) -> list[dict[str, object]]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT m.id, m.source, m.match, r.name AS role
+                FROM identity_mappings m JOIN roles r ON r.id = m.role_id
+                ORDER BY m.source, m.created_at, m.match
+                """
+            )
+            return [
+                {"id": str(row["id"]), "source": row["source"], "match": row["match"], "role": row["role"]}
+                for row in cursor.fetchall()
+            ]
+
+    def get_identity_mappings(self, source: str) -> list[tuple[str, str]]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT m.match, r.name AS role
+                FROM identity_mappings m JOIN roles r ON r.id = m.role_id
+                WHERE m.source = %s ORDER BY m.created_at, m.match
+                """,
+                (source,),
+            )
+            return [(str(row["match"]), str(row["role"])) for row in cursor.fetchall()]
+
+    def replace_identity_mappings(
+        self, source: str, mappings: list[tuple[str, str]], *, actor_id: str
+    ) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM identity_mappings WHERE source = %s", (source,))
+            for match, role_name in mappings:
+                cursor.execute("SELECT id FROM roles WHERE name = %s", (role_name,))
+                role = cursor.fetchone()
+                if role is None:
+                    raise KeyError(f"Role {role_name!r} does not exist")
+                cursor.execute(
+                    "INSERT INTO identity_mappings (source, match, role_id) VALUES (%s, %s, %s)",
+                    (source, match, role["id"]),
+                )
+            cursor.execute(
+                """
+                INSERT INTO audit_events (actor_id, action, resource_type, resource_id, details)
+                VALUES (%s::uuid, 'identity_mappings_replaced', 'identity', %s, %s)
+                """,
+                (actor_id, source, Jsonb({"mappings": [{"match": m, "role": r} for m, r in mappings]})),
+            )
+
+    def provision_external_user(
+        self,
+        username: str,
+        source: str,
+        role_name: str,
+        attributes: Mapping[str, JsonValue],
+    ) -> str:
+        """Create the account on first login; on later logins re-apply role and attributes."""
+        name = username.strip().casefold()
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM roles WHERE name = %s", (role_name,))
+            role = cursor.fetchone()
+            if role is None:
+                raise ValueError(f"Role {role_name!r} does not exist")
+            cursor.execute(
+                "SELECT id, auth_source FROM users WHERE lower(username) = %s FOR UPDATE", (name,)
+            )
+            existing = cursor.fetchone()
+            if existing is not None and existing["auth_source"] != source:
+                raise ValueError("That username belongs to an account from another source")
+            if existing is None:
+                cursor.execute(
+                    """
+                    INSERT INTO users (id, username, password_hash, role_id, auth_source,
+                                       must_change_password)
+                    VALUES (gen_random_uuid(), %s, NULL, %s, %s, FALSE) RETURNING id
+                    """,
+                    (name, role["id"], source),
+                )
+                user_id = str(cursor.fetchone()["id"])  # type: ignore[index]
+                action = "external_user_created"
+            else:
+                user_id = str(existing["id"])
+                cursor.execute(
+                    "UPDATE users SET role_id = %s WHERE id = %s::uuid AND role_id <> %s",
+                    (role["id"], user_id, role["id"]),
+                )
+                action = "external_user_refreshed"
+            cursor.execute(
+                "DELETE FROM user_attributes WHERE user_id = %s::uuid AND source = %s",
+                (user_id, source),
+            )
+            for key, value in attributes.items():
+                cursor.execute(
+                    """
+                    INSERT INTO user_attributes (user_id, key, value, source)
+                    VALUES (%s::uuid, %s, %s, %s)
+                    ON CONFLICT (user_id, key) DO NOTHING
+                    """,
+                    (user_id, key, Jsonb(value), source),
+                )
+            cursor.execute(
+                """
+                INSERT INTO audit_events (actor_id, action, resource_type, resource_id, details)
+                VALUES (%s::uuid, %s, 'user', %s, %s)
+                """,
+                (user_id, action, name, Jsonb({"source": source, "role": role_name})),
+            )
+        return user_id
+
     @staticmethod
     def _validate_project_ids(cursor: psycopg.Cursor[Row], project_ids: list[str]) -> None:
         if len(set(project_ids)) != len(project_ids):
@@ -869,4 +980,5 @@ def _auth_user(row: Row) -> AuthUser:
         status=str(row["status"]),
         must_change_password=bool(row["must_change_password"]),
         locked_until=cast(datetime | None, row["locked_until"]),
+        auth_source=str(row.get("auth_source", "local")),
     )

@@ -1,0 +1,227 @@
+{
+  "status": "provisional_draft_references",
+  "note": "References are unapproved drafts; do not treat as the baseline until a DBA approves them.",
+  "date": "2026-10-13",
+  "account": "abhijit.dba",
+  "sql_model": "llama3:latest",
+  "scored": 15,
+  "unmeasured_no_reference": 5,
+  "reference_invalid": [
+    "ecom-14",
+    "ecom-15",
+    "ecom-16",
+    "ecom-24"
+  ],
+  "execution_accuracy": 0.2,
+  "validity_rate_first_attempt": 0.467,
+  "correction_success": 0.625,
+  "latency_seconds": {
+    "p50": 69.3,
+    "p95": 116.1
+  },
+  "outcomes": {
+    "correct": 3,
+    "failed": 3,
+    "reference_invalid": 4,
+    "wrong_rows": 9
+  },
+  "cases": [
+    {
+      "id": "ecom-01",
+      "question": "Which five customers generated the most order revenue?",
+      "difficulty": "medium",
+      "seconds": 32.8,
+      "attempts": 0,
+      "logical_sql": "SELECT c.customer_id, SUM(p.amount) AS total_revenue FROM orders o JOIN order_items oi ON o.order_id = oi.order_id JOIN payments p ON o.order_id = p.order_id JOIN customers c ON o.customer_id = c.customer_id GROUP BY c.customer_id ORDER BY total_revenue DESC LIMIT 5",
+      "first_attempt_valid": true,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-02",
+      "question": "Show monthly order counts for this year.",
+      "difficulty": "easy",
+      "seconds": 134.2,
+      "attempts": 3,
+      "logical_sql": "SELECT EXTRACT(MONTH FROM o.order_id), COUNT(*) AS order_count FROM orders o JOIN customers c ON o.customer_id = c.customer_id JOIN order_items oi ON o.order_id = oi.order_id WHERE EXTRACT(YEAR FROM o.order_id) = EXTRACT(YEAR FROM CURRENT_DATE) GROUP BY EXTRACT(MONTH FROM o.order_id)",
+      "first_attempt_valid": false,
+      "outcome": "failed",
+      "failure": "DRY_RUN_FAILED"
+    },
+    {
+      "id": "ecom-03",
+      "question": "What is the average order value by region?",
+      "difficulty": "medium",
+      "seconds": 116.1,
+      "attempts": 3,
+      "logical_sql": "SELECT o.region, AVG(p.product_id) AS avg_order_value FROM orders o JOIN customers c ON o.customer_id = c.customer_id JOIN order_items oi ON o.order_id = oi.order_id JOIN products p ON oi.product_id = p.product_id GROUP BY o.region",
+      "first_attempt_valid": false,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-04",
+      "question": "List customers who have never placed an order.",
+      "difficulty": "medium",
+      "seconds": 34.0,
+      "attempts": 0,
+      "logical_sql": "SELECT c.customer_id, c.* FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id WHERE o.order_id IS NULL",
+      "first_attempt_valid": true,
+      "outcome": "correct"
+    },
+    {
+      "id": "ecom-05",
+      "question": "Which products have the highest total quantity sold?",
+      "difficulty": "medium",
+      "seconds": 39.4,
+      "attempts": 0,
+      "logical_sql": "SELECT p.product_id, SUM(oi.quantity) AS total_quantity_sold FROM products p JOIN order_items oi ON p.product_id = oi.product_id GROUP BY p.product_id ORDER BY total_quantity_sold DESC",
+      "first_attempt_valid": true,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-06",
+      "question": "How many orders are in each status?",
+      "difficulty": "easy",
+      "seconds": 23.4,
+      "attempts": 0,
+      "logical_sql": "SELECT o.status, COUNT(*) FROM orders o GROUP BY o.status",
+      "first_attempt_valid": true,
+      "outcome": "correct"
+    },
+    {
+      "id": "ecom-07",
+      "question": "Find customers by city and country.",
+      "difficulty": "easy",
+      "seconds": 30.6,
+      "attempts": 0,
+      "logical_sql": "SELECT c.customer_id, a.city, a.country FROM customers c JOIN addresses a ON c.customer_id = a.customer_id WHERE a.city IS NOT NULL AND a.country IS NOT NULL",
+      "first_attempt_valid": true,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-08",
+      "question": "Which categories have the most products?",
+      "difficulty": "easy",
+      "seconds": 29.2,
+      "attempts": 0,
+      "logical_sql": "SELECT c.category_id, COUNT(p.product_id) AS product_count FROM categories c LEFT JOIN products p ON c.category_id = p.category_id GROUP BY c.category_id ORDER BY product_count DESC",
+      "first_attempt_valid": true,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-09",
+      "question": "Show revenue by product category.",
+      "difficulty": "hard",
+      "seconds": 81.8,
+      "attempts": 2,
+      "logical_sql": "SELECT c.category_id, SUM(p.product_id * oi.quantity) AS revenue FROM categories c JOIN products p ON c.category_id = p.category_id JOIN order_items oi ON p.product_id = oi.product_id GROUP BY c.category_id",
+      "first_attempt_valid": false,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-10",
+      "question": "What inventory quantities are available by region?",
+      "difficulty": "medium",
+      "seconds": 72.9,
+      "attempts": 2,
+      "logical_sql": "SELECT i.warehouse_region, COALESCE(SUM(oi.quantity), 0) AS total_quantity FROM products p JOIN inventory i ON p.product_id = i.product_id LEFT JOIN order_items oi ON p.product_id = oi.product_id GROUP BY i.warehouse_region",
+      "first_attempt_valid": false,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-12",
+      "question": "Show payments collected by month and payment method.",
+      "difficulty": "medium",
+      "seconds": 110.2,
+      "attempts": 3,
+      "logical_sql": "SELECT EXTRACT(MONTH FROM o.order_date) AS month, p.method, SUM(p.amount) AS total_payments FROM orders o JOIN order_items oi ON o.order_id = oi.order_id JOIN payments p ON o.order_id = p.order_id GROUP BY month, p.method ORDER BY month, p.method",
+      "first_attempt_valid": false,
+      "outcome": "failed",
+      "failure": "UNKNOWN_COLUMN"
+    },
+    {
+      "id": "ecom-14",
+      "question": "What is the average review rating for each product?",
+      "difficulty": "medium",
+      "seconds": 104.7,
+      "attempts": 3,
+      "logical_sql": "SELECT p.product_id, AVG(r.rating) AS avg_review_rating FROM products p LEFT JOIN (SELECT oi.product_id, r.* FROM order_items oi LEFT JOIN reviews r ON oi.order_item_id = r.order_item_id) r ON p.product_id = r.product_id GROUP BY p.product_id",
+      "first_attempt_valid": false,
+      "outcome": "reference_invalid",
+      "detail": "UNKNOWN_MODEL: 'reviews' is not a deployed model or metric"
+    },
+    {
+      "id": "ecom-15",
+      "question": "List active coupons and their discount percentages.",
+      "difficulty": "easy",
+      "seconds": 55.2,
+      "attempts": 1,
+      "logical_sql": "SELECT c.category_id FROM categories c WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.active IS FALSE AND p.category_id = c.category_id)",
+      "first_attempt_valid": false,
+      "outcome": "reference_invalid",
+      "detail": "UNKNOWN_MODEL: 'coupons' is not a deployed model or metric"
+    },
+    {
+      "id": "ecom-16",
+      "question": "How many orders used each coupon?",
+      "difficulty": "medium",
+      "seconds": 95.7,
+      "attempts": 3,
+      "logical_sql": "SELECT o.order_id, COUNT(p.product_id) AS coupon_count FROM orders o JOIN order_items p ON o.order_id = p.order_id GROUP BY o.order_id",
+      "first_attempt_valid": false,
+      "outcome": "reference_invalid",
+      "detail": "UNKNOWN_MODEL: 'coupons' is not a deployed model or metric; UNKNOWN_MODEL: 'order_coupons' is not a deployed model or metric"
+    },
+    {
+      "id": "ecom-18",
+      "question": "Compare order counts across customer regions and statuses.",
+      "difficulty": "hard",
+      "seconds": 87.9,
+      "attempts": 2,
+      "logical_sql": "SELECT a.customer_id, COUNT(o.order_id) AS order_count FROM addresses a JOIN customers c ON a.customer_id = c.customer_id LEFT JOIN orders o ON c.customer_id = o.customer_id GROUP BY a.customer_id ORDER BY order_count DESC",
+      "first_attempt_valid": false,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-19",
+      "question": "What is the total value of products currently in inventory?",
+      "difficulty": "medium",
+      "seconds": 69.3,
+      "attempts": 3,
+      "logical_sql": "SELECT SUM(p.product_id) FROM products p JOIN inventory i ON p.product_id = i.product_id",
+      "first_attempt_valid": false,
+      "outcome": "wrong_rows"
+    },
+    {
+      "id": "ecom-20",
+      "question": "Find products that have never been ordered.",
+      "difficulty": "medium",
+      "seconds": 30.2,
+      "attempts": 0,
+      "logical_sql": "SELECT p.* FROM products p LEFT JOIN order_items oi ON p.product_id = oi.product_id WHERE oi.product_id IS NULL",
+      "first_attempt_valid": true,
+      "outcome": "correct"
+    },
+    {
+      "id": "ecom-21",
+      "question": "Show the top customers by number of orders this quarter.",
+      "difficulty": "medium",
+      "seconds": 111.4,
+      "attempts": 3,
+      "logical_sql": "SELECT c.customer_id, COUNT(o.order_id) AS num_orders FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE EXTRACT(quarter FROM CURRENT_DATE) = EXTRACT(quarter FROM o.order_date::date) GROUP BY c.customer_id ORDER BY num_orders DESC LIMIT 10",
+      "first_attempt_valid": false,
+      "outcome": "failed",
+      "failure": "UNKNOWN_COLUMN"
+    },
+    {
+      "id": "ecom-24",
+      "question": "List products with an average rating below three stars.",
+      "difficulty": "medium",
+      "seconds": 124.3,
+      "attempts": 3,
+      "logical_sql": "SELECT p.product_id, AVG(p.rating) AS avg_rating FROM products p JOIN (SELECT oi.product_id, AVG(pmt.rating) AS avg_rating FROM order_items oi JOIN orders o ON oi.order_id = o.order_id JOIN payments pmt ON o.order_id = pmt.order_id GROUP BY oi.product_id) r ON p.product_id = r.product_id WHERE avg_rating < 3",
+      "first_attempt_valid": false,
+      "outcome": "reference_invalid",
+      "detail": "UNKNOWN_MODEL: 'reviews' is not a deployed model or metric"
+    }
+  ]
+}

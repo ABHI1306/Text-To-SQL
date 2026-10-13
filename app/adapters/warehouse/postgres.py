@@ -92,3 +92,14 @@ class PostgresWarehouseAdapter:
             truncated = len(fetched_rows) > max_rows
 
         return QueryResult(columns=columns, rows=rows, truncated=truncated)
+
+    def explain(self, query: ValidatedQuery) -> None:
+        self._ensure_read_only_select(query.sql.replace("%%", "%"))
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SET TRANSACTION READ ONLY")
+            cursor.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(self._statement_timeout_ms),),
+            )
+            cursor.execute("EXPLAIN (FORMAT JSON) " + query.sql, dict(query.parameters))
+            cursor.fetchall()

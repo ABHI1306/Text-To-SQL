@@ -13,8 +13,11 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
+from app.auth.identity import IdentityRepository, resolve_role
 from app.auth.models import AuthContext, LoginResult
 from app.auth.repository import AuthRepository
+from app.core.errors import PortError
+from app.ports.directory import DirectoryPort
 
 MIN_PASSWORD_LENGTH = 12
 _ISSUER = "text2sql-local"
@@ -80,10 +83,14 @@ class AuthService:
         max_failures: int = 5,
         failure_window_seconds: int = 900,
         lockout_seconds: int = 900,
+        directory: DirectoryPort | None = None,
+        identity_repository: IdentityRepository | None = None,
     ) -> None:
         if len(jwt_secret) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters")
         self._repository = repository
+        self._directory = directory
+        self._identity = identity_repository
         self._jwt_secret = jwt_secret
         self._access_ttl = access_token_ttl_seconds
         self._refresh_ttl = refresh_token_ttl_seconds
@@ -110,6 +117,8 @@ class AuthService:
             raise AuthenticationError("Invalid username or password")
 
         user = self._repository.get_user_by_username(normalized_username)
+        if self._directory is not None and (user is None or user.auth_source == "ldap"):
+            return self._login_directory(normalized_username, password, rate_keys, user, now)
         valid_password = self._verify_password(
             user.password_hash if user and user.password_hash else self._dummy_hash,
             password,
@@ -139,7 +148,57 @@ class AuthService:
 
         self._limiter.clear(rate_keys)
         self._repository.clear_login_failures(user.user_id)
-        context = self._repository.get_auth_context(user.user_id)
+        return self._open_session(user.user_id, normalized_username, "local", now)
+
+    def _login_directory(
+        self,
+        username: str,
+        password: str,
+        rate_keys: tuple[str, ...],
+        user: Any,
+        now: datetime,
+    ) -> LoginResult:
+        """LDAP login: the directory verifies the password; nothing about it is stored."""
+
+        def refuse(reason: str, actor: str | None = None) -> AuthenticationError:
+            self._limiter.record_failure(rate_keys)
+            self._repository.append_auth_audit(
+                actor, "login_failed", username, {"source": "ldap", "reason": reason}
+            )
+            return AuthenticationError("Invalid username or password")
+
+        assert self._directory is not None
+        try:
+            identity = self._directory.authenticate(username, password)
+        except PortError as error:
+            raise refuse("directory_unavailable") from error
+        if identity is None:
+            raise refuse("invalid_credentials", user.user_id if user else None)
+        if self._identity is None:
+            raise refuse("identity_mappings_unavailable")
+        role_name = resolve_role(identity.groups, self._identity.get_identity_mappings("ldap"))
+        if role_name is None:
+            raise refuse("no_role_mapping", user.user_id if user else None)
+        try:
+            user_id = self._identity.provision_external_user(
+                username, "ldap", role_name, identity.attributes
+            )
+        except ValueError as error:
+            raise refuse("account_conflict") from error
+        refreshed = self._repository.get_user_by_username(username)
+        if (
+            refreshed is None
+            or refreshed.status != "active"
+            or (refreshed.locked_until is not None and refreshed.locked_until > now)
+        ):
+            raise refuse("account_disabled", user_id)
+        self._limiter.clear(rate_keys)
+        return self._open_session(user_id, username, "ldap", now)
+
+    def _open_session(
+        self, user_id: str, username: str, source: str, now: datetime
+    ) -> LoginResult:
+        context = self._repository.get_auth_context(user_id)
         if context is None:
             raise AuthenticationError("Invalid username or password")
         session_id = secrets.token_hex(16)
@@ -147,14 +206,14 @@ class AuthService:
         refresh_token = secrets.token_urlsafe(32)
         self._repository.create_session(
             session_id=session_id,
-            user_id=user.user_id,
+            user_id=user_id,
             family_id=family_id,
             refresh_token_hash=_token_hash(refresh_token),
             expires_at=now + timedelta(seconds=self._refresh_ttl),
         )
         access_token = self._create_access_token(context, session_id, now)
         self._repository.append_auth_audit(
-            user.user_id, "login_succeeded", normalized_username, {"source": "local"}
+            user_id, "login_succeeded", username, {"source": source}
         )
         return LoginResult(
             access_token,

@@ -12,7 +12,6 @@ from app.adapters.llm.ollama import OllamaLLMAdapter
 from app.adapters.llm.ollama_embedder import OllamaEmbedderAdapter
 from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
-from app.adapters.warehouse.postgres import PostgresWarehouseAdapter
 from app.adapters.warehouse.postgres_catalog import PostgresCatalogAdapter
 from app.api.dependencies import (
     get_audit_service,
@@ -41,11 +40,6 @@ from app.config import get_settings
 from app.domain.mdl import Mdl, MdlValidationError, validate_mdl_against_catalog
 from app.semantic.indexing import DeployService, IndexingService
 from app.semantic.profiling import ProfiledDraft, ProfilingService
-from app.semantic.query import (
-    QueryGenerationError,
-    QuestionService,
-    serialize_answer,
-)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -292,7 +286,7 @@ def _profile_service(catalog: PostgresCatalogAdapter) -> ProfilingService:
     settings = get_settings()
     return ProfilingService(
         catalog,
-        OllamaLLMAdapter(settings.ollama_url, settings.sql_model),
+        OllamaLLMAdapter(settings.ollama_url, settings.sql_model, timeout_seconds=90),
     )
 
 
@@ -548,13 +542,17 @@ def introspect_project(
     tables = tuple((table["schema"], table["table"]) for table in selected)
     _, catalog = _project_connection(repository, project_id)
     try:
-        draft = _profile_service(catalog).create_draft(tables)
-        mdl = _profile_service(catalog).draft_descriptions(draft.mdl)
+        service = _profile_service(catalog)
+        draft = service.create_draft(tables)
+        mdl, warnings = service.draft_descriptions_best_effort(draft.mdl)
     except (TypeError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except psycopg.Error as error:
         raise HTTPException(status_code=502, detail="Could not profile selected tables") from error
-    return _serialize_draft(ProfiledDraft(mdl=mdl, tables=draft.tables, summary=draft.summary))
+    return {
+        **_serialize_draft(ProfiledDraft(mdl=mdl, tables=draft.tables, summary=draft.summary)),
+        "warnings": warnings,
+    }
 
 
 @router.get("/projects/{project_id}/mdl")
@@ -656,57 +654,6 @@ def deploy_project_mdl(
         if vector_store is not None:
             vector_store.close()
     return result
-
-
-@router.post("/projects/{project_id}/query")
-def ask_project_question(
-    project_id: UUID,
-    body: AskQuestionRequest,
-    context: AskQuestionContext,
-    repository: RepositoryDependency,
-) -> dict[str, object]:
-    _require_project_access(context, project_id)
-    version = repository.get_active_mdl_version(str(project_id))
-    if version is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Deploy a semantic model before asking questions",
-        )
-    document = repository.get_mdl(str(project_id), version)
-    if document is None:
-        raise HTTPException(status_code=409, detail="The deployed semantic model is missing")
-    mdl_document = {
-        key: value for key, value in document.items()
-        if key not in {"project_id", "revision"}
-    }
-    try:
-        mdl = Mdl.model_validate(mdl_document)
-        _, dsn, ca_certificate = _project_connection_details(repository, project_id)
-        settings = get_settings()
-        vector_store = QdrantVectorStoreAdapter(settings.qdrant_url)
-        service = QuestionService(
-            OllamaEmbedderAdapter(settings.ollama_url, settings.embedding_model),
-            vector_store,
-            OllamaLLMAdapter(settings.ollama_url, settings.sql_model),
-            PostgresWarehouseAdapter(
-                dsn,
-                statement_timeout_ms=settings.warehouse_statement_timeout_ms,
-                max_rows=settings.warehouse_max_rows,
-                ssl_ca_certificate=ca_certificate,
-            ),
-            max_rows=settings.warehouse_max_rows,
-        )
-        answer = service.ask(str(project_id), version, body.question, mdl)
-    except QueryGenerationError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except psycopg.Error as error:
-        raise HTTPException(status_code=502, detail="PostgreSQL could not execute the query") from error
-    except (RuntimeError, TypeError, ValueError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    finally:
-        if "vector_store" in locals():
-            vector_store.close()
-    return {**serialize_answer(answer)}
 
 
 @router.get("/roles")

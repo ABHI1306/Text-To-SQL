@@ -175,3 +175,47 @@ def test_profile_requires_nonempty_unique_table_selection(ecommerce_profiles) ->
         service.create_draft(())
     with pytest.raises(ValueError, match="unique"):
         service.create_draft((("ecommerce", "orders"), ("ecommerce", "orders")))
+
+
+def test_best_effort_descriptions_skip_unusable_tables_and_report_them() -> None:
+    import json
+
+    from app.domain.mdl import Mdl
+    from app.semantic.profiling import ProfilingService
+
+    class FlakyLlm:
+        def generate(self, prompt: str, *, temperature: float = 0.0, schema: object = None) -> str:
+            requested = json.loads(prompt.rsplit("\n", 1)[-1])
+            if requested[0]["model"] == "orders":
+                raise RuntimeError("Local Ollama model is unavailable")
+            return json.dumps(
+                {
+                    "models": [
+                        {
+                            "name": m["model"],
+                            "description": f"About {m['model']}.",
+                            "columns": [{"name": c["name"], "description": "A column."} for c in m["columns"]],
+                        }
+                        for m in requested
+                    ]
+                }
+            )
+
+    def model(name: str) -> dict[str, object]:
+        return {
+            "name": name, "tableReference": f"s.{name}",
+            "columns": [{"name": "id", "type": "integer"}],
+        }
+
+    mdl = Mdl.model_validate({"models": [model("customers"), model("orders")]})
+    result, warnings = ProfilingService(None, FlakyLlm()).draft_descriptions_best_effort(mdl)  # type: ignore[arg-type]
+    by_name = {m.name: m for m in result.models}
+    assert by_name["customers"].description == "About customers."
+    assert by_name["orders"].description == "" and by_name["orders"].needs_review
+    assert warnings[0].startswith("Descriptions were generated for 1 of 2 tables")
+    assert any(w.startswith("orders:") for w in warnings)
+
+    _, none = ProfilingService(None, FlakyLlm()).draft_descriptions_best_effort(  # type: ignore[arg-type]
+        Mdl.model_validate({"models": [model("customers")]})
+    )
+    assert none == []

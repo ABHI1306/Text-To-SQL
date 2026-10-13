@@ -1,0 +1,82 @@
+{
+  "status": "draft_unapproved",
+  "note": "Reference queries written by the developer over logical model names. NOT approved by a DBA: scores computed with them are provisional. Cases without a reference (ecom-11, 13, 17, 22, 23 need columns the demo schema lacks) are not measurable.",
+  "references": {
+    "ecom-01": {
+      "logical_sql": "SELECT c.customer_id, SUM(oi.quantity * oi.unit_price) AS revenue FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN order_items oi ON oi.order_id = o.order_id GROUP BY c.customer_id ORDER BY revenue DESC LIMIT 5",
+      "approval_status": "draft"
+    },
+    "ecom-02": {
+      "logical_sql": "SELECT date_trunc('month', ordered_at) AS month, COUNT(*) AS orders FROM orders WHERE ordered_at >= date_trunc('year', now()) GROUP BY 1",
+      "approval_status": "draft"
+    },
+    "ecom-03": {
+      "logical_sql": "SELECT o.region, SUM(oi.quantity * oi.unit_price) / COUNT(DISTINCT o.order_id) AS avg_order_value FROM orders o JOIN order_items oi ON oi.order_id = o.order_id GROUP BY o.region",
+      "approval_status": "draft"
+    },
+    "ecom-04": {
+      "logical_sql": "SELECT c.customer_id FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id)",
+      "approval_status": "draft"
+    },
+    "ecom-05": {
+      "logical_sql": "SELECT p.name, SUM(oi.quantity) AS units FROM products p JOIN order_items oi ON oi.product_id = p.product_id GROUP BY p.name ORDER BY units DESC",
+      "approval_status": "draft"
+    },
+    "ecom-06": {
+      "logical_sql": "SELECT status, COUNT(*) AS orders FROM orders GROUP BY status",
+      "approval_status": "draft"
+    },
+    "ecom-07": {
+      "logical_sql": "SELECT c.first_name, c.last_name, a.city, a.country FROM customers c JOIN addresses a ON a.customer_id = c.customer_id",
+      "approval_status": "draft"
+    },
+    "ecom-08": {
+      "logical_sql": "SELECT c.name, COUNT(*) AS products FROM categories c JOIN products p ON p.category_id = c.category_id GROUP BY c.name ORDER BY products DESC",
+      "approval_status": "draft"
+    },
+    "ecom-09": {
+      "logical_sql": "SELECT c.name, SUM(oi.quantity * oi.unit_price) AS revenue FROM categories c JOIN products p ON p.category_id = c.category_id JOIN order_items oi ON oi.product_id = p.product_id GROUP BY c.name",
+      "approval_status": "draft"
+    },
+    "ecom-10": {
+      "logical_sql": "SELECT warehouse_region, SUM(quantity_on_hand) AS quantity FROM inventory GROUP BY warehouse_region",
+      "approval_status": "draft"
+    },
+    "ecom-12": {
+      "logical_sql": "SELECT date_trunc('month', paid_at) AS month, method, SUM(amount) AS collected FROM payments GROUP BY 1, 2",
+      "approval_status": "draft"
+    },
+    "ecom-14": {
+      "logical_sql": "SELECT p.name, AVG(r.rating) AS avg_rating FROM products p JOIN reviews r ON r.product_id = p.product_id GROUP BY p.name",
+      "approval_status": "draft"
+    },
+    "ecom-15": {
+      "logical_sql": "SELECT code, discount_percent FROM coupons WHERE starts_at <= now() AND ends_at >= now()",
+      "approval_status": "draft"
+    },
+    "ecom-16": {
+      "logical_sql": "SELECT cp.code, COUNT(*) AS orders FROM coupons cp JOIN order_coupons oc ON oc.coupon_id = cp.coupon_id GROUP BY cp.code",
+      "approval_status": "draft"
+    },
+    "ecom-18": {
+      "logical_sql": "SELECT c.region, o.status, COUNT(*) AS orders FROM customers c JOIN orders o ON o.customer_id = c.customer_id GROUP BY c.region, o.status",
+      "approval_status": "draft"
+    },
+    "ecom-19": {
+      "logical_sql": "SELECT SUM(i.quantity_on_hand * p.unit_price) AS inventory_value FROM inventory i JOIN products p ON p.product_id = i.product_id",
+      "approval_status": "draft"
+    },
+    "ecom-20": {
+      "logical_sql": "SELECT p.name FROM products p WHERE NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.product_id)",
+      "approval_status": "draft"
+    },
+    "ecom-21": {
+      "logical_sql": "SELECT customer_id, COUNT(*) AS orders FROM orders WHERE ordered_at >= date_trunc('quarter', now()) GROUP BY customer_id ORDER BY orders DESC",
+      "approval_status": "draft"
+    },
+    "ecom-24": {
+      "logical_sql": "SELECT p.name FROM products p JOIN reviews r ON r.product_id = p.product_id GROUP BY p.name HAVING AVG(r.rating) < 3",
+      "approval_status": "draft"
+    }
+  }
+}

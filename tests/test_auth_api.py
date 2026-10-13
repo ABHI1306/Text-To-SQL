@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.ask_routes import router as ask_router
 from app.api.dependencies import (
     get_audit_service,
     get_auth_service,
@@ -130,6 +131,7 @@ def test_login_does_not_disclose_unknown_username(monkeypatch) -> None:
 def test_main_openapi_includes_auth_and_setup_routes() -> None:
     app = FastAPI()
     app.include_router(router)
+    app.include_router(ask_router)
     paths = app.openapi()["paths"]
     assert "/api/v1/auth/refresh" in paths
     assert "/api/v1/projects/{project_id}/selected-tables" in paths

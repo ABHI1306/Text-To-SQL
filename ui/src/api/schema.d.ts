@@ -235,7 +235,44 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["askProjectQuestion"];
+        /** @description Runs the question through the agent graph (retrieve, generate, compile under the caller's row policies, validate with a dry run, execute). Returns the logical SQL; the compiled SQL is included only for accounts holding `rerun_sql`. A typed failure is HTTP 422 (503 for LLM_UNAVAILABLE) with `{code, message, retryable}` in `detail`. */
+        post: operations["askQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/query/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Same pipeline as `/query`, as server-sent events in this order (steps repeat on correction): retrieval, sql_candidate, compilation, validation, correction, rows, then done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts holding `rerun_sql`. `clarification` and `suggestions` events are defined for the conversation work and are not emitted yet. */
+        post: operations["askQuestionStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identity/mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listIdentityMappings"];
+        /** @description Replaces all mappings of one source. The first matching mapping (in the order given) decides the role, and mappings are re-applied at each login, so removing someone from a group removes the role at their next login. A caller cannot map a role holding capabilities they lack. */
+        put: operations["replaceIdentityMappings"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1118,7 +1155,7 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
-    askProjectQuestion: {
+    askQuestion: {
         parameters: {
             query?: never;
             header?: never;
@@ -1135,29 +1172,94 @@ export interface operations {
             };
         };
         responses: {
-            /** @description SQL and results returned from the connected PostgreSQL project. */
+            /** @description Rows for the question. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    askQuestionStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    question: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Event stream. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        sql: string;
-                        columns: string[];
-                        rows: unknown[][];
-                        retrieved_models: string[];
-                        model_version: number;
-                        elapsed_ms: number;
-                        truncated: boolean;
-                        /** @constant */
-                        source: "postgresql";
-                    };
+                    "text/event-stream": string;
                 };
             };
-            409: components["responses"]["Error"];
+        };
+    };
+    listIdentityMappings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description LDAP/OIDC group-to-role mappings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    replaceIdentityMappings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    source: "ldap" | "oidc";
+                    mappings: {
+                        /** @description Group name or DN. */
+                        match: string;
+                        role: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Mappings replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
             422: components["responses"]["Error"];
-            502: components["responses"]["Error"];
-            503: components["responses"]["Error"];
         };
     };
     listRoles: {

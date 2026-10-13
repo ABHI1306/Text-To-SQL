@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -176,6 +177,35 @@ class ProfilingService:
                     column.description = descriptions_by_column[column.name].strip()
                 column.needs_review = True
         return mdl
+
+    def draft_descriptions_best_effort(
+        self, mdl: Mdl, *, budget_seconds: float = 120.0
+    ) -> tuple[Mdl, list[str]]:
+        """Describe tables one at a time so a slow local model cannot block the whole draft.
+
+        A table whose reply is unusable, or that does not fit in the time budget, is left
+        undescribed (flagged for review) and reported in the returned warnings.
+        """
+        started = time.monotonic()
+        warnings: list[str] = []
+        described = 0
+        for model in mdl.models:
+            if time.monotonic() - started > budget_seconds:
+                warnings.append(f"{model.name}: skipped, the description time budget ran out")
+                continue
+            single = mdl.model_copy(update={"models": [model], "relationships": [], "metrics": []})
+            try:
+                self.draft_descriptions(single)
+                described += 1
+            except (RuntimeError, TypeError, ValueError) as error:
+                warnings.append(f"{model.name}: {error}")
+        if warnings:
+            warnings.insert(
+                0,
+                f"Descriptions were generated for {described} of {len(mdl.models)} tables. "
+                "Write the others by hand or profile again.",
+            )
+        return mdl, warnings
 
     def _create_model_mappings(
         self,

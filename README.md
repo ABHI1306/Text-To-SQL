@@ -232,3 +232,31 @@ previews compiled SQL and a sample result, and a deploy report tab
 Not done: the human checkpoint (3 test users, policy approval, DBA review of the compile
 cases), and routing questions through the compiler (Day 5). See `docs/DECISIONS.md` for the
 choices and their limits.
+
+## Day 5 progress
+
+Questions now run through one graph (`app/agent/graph.py`): retrieve, generate logical SQL,
+compile under the asker's row policies, validate (allowlist plus an `EXPLAIN` dry run), execute,
+with up to three typed corrections. `POST /projects/{id}/query` returns rows (logical SQL for
+everyone, compiled SQL only with `rerun_sql`); `POST /projects/{id}/query/stream` streams the
+steps as server-sent events, and the Home screen renders them as a timeline with the results
+table, a SQL viewer, bar/line charts, retry and clarification quick replies.
+
+From the command line (inside the api container):
+
+    docker compose exec api uv run --no-sync python -m app.cli.ask \
+        --project-id <uuid> --username <account> --show-compiled --events "How many orders per status?"
+
+Safety suites: `tests/test_redteam.py` (30 cases) and `tests/test_rls_suite.py` (3 users x 39
+shapes, against PostgreSQL; needs `WAREHOUSE_DSN`). LDAP login is wired into `/auth/login` when
+`LDAP_URI` is set (see `.env.example`); groups map to roles through `PUT /identity/mappings`.
+To try it with the OpenLDAP demo container:
+
+    sh scripts/ldap/make-certs.sh
+    docker compose -f docker-compose.yml -f docker-compose.ldap.yml --profile identity-demo up -d
+
+Apply migration `0005_day5` first (`docker compose --env-file .env --profile tools run --rm migrate`).
+Execution accuracy runner: `scripts/evaluate_execution.py`; the baseline and its caveats are in
+`docs/DECISIONS.md` and `reports/`. Day 5 is not signed off: the references behind the baseline
+are unapproved drafts, and the compiler/validator line-by-line review and the hostile-query
+session are still open.

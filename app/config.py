@@ -26,6 +26,17 @@ class Settings:
     login_lockout_seconds: int
     sql_model: str
     embedding_model: str = "nomic-embed-text:latest"
+    ldap_uri: str = ""
+    ldap_start_tls: bool = False
+    ldap_allow_insecure: bool = False
+    ldap_ca_cert_file: str = ""
+    ldap_service_dn: str = ""
+    ldap_service_password: str = ""
+    ldap_user_base_dn: str = ""
+    ldap_user_filter: str = "(uid={username})"
+    ldap_group_base_dn: str = ""
+    ldap_group_filter: str = "(member={dn})"
+    ldap_attribute_map: str = ""
 
 
 def get_settings() -> Settings:
@@ -58,6 +69,17 @@ def get_settings() -> Settings:
         login_lockout_seconds=int(os.getenv("LOGIN_LOCKOUT_SECONDS", "900")),
         sql_model=os.getenv("SQL_MODEL", "llama3:latest"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text:latest"),
+        ldap_uri=os.getenv("LDAP_URI", ""),
+        ldap_start_tls=os.getenv("LDAP_START_TLS", "").lower() in {"1", "true", "yes"},
+        ldap_allow_insecure=os.getenv("LDAP_ALLOW_INSECURE", "").lower() in {"1", "true", "yes"},
+        ldap_ca_cert_file=os.getenv("LDAP_CA_CERT_FILE", ""),
+        ldap_service_dn=os.getenv("LDAP_SERVICE_DN", ""),
+        ldap_service_password=os.getenv("LDAP_SERVICE_PASSWORD", ""),
+        ldap_user_base_dn=os.getenv("LDAP_USER_BASE_DN", ""),
+        ldap_user_filter=os.getenv("LDAP_USER_FILTER", "(uid={username})"),
+        ldap_group_base_dn=os.getenv("LDAP_GROUP_BASE_DN", ""),
+        ldap_group_filter=os.getenv("LDAP_GROUP_FILTER", "(member={dn})"),
+        ldap_attribute_map=os.getenv("LDAP_ATTRIBUTE_MAP", ""),
     )
 
 

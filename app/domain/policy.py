@@ -51,9 +51,11 @@ class RowPolicy(BaseModel):
         return value
 
     def applies_to_role(self, role_name: str) -> bool:
-        if role_name in self.applies_to.exempt_roles:
+        role = role_name.casefold()
+        if role in {name.casefold() for name in self.applies_to.exempt_roles}:
             return False
-        return not self.applies_to.roles or role_name in self.applies_to.roles
+        roles = {name.casefold() for name in self.applies_to.roles}
+        return not roles or role in roles
 
     def attributes(self) -> tuple[str, ...]:
         """Attribute names referenced by the predicate template, in order of first use."""

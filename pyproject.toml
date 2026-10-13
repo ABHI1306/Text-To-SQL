@@ -17,6 +17,8 @@ dependencies = [
   "argon2-cffi>=25.1.0",
   "pyjwt[crypto]>=2.8.0",
   "cryptography>=50.0.2",
+  "langgraph>=1.2.15",
+  "ldap3>=2.9.1",
 ]
 
 [project.optional-dependencies]

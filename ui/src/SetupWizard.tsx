@@ -41,18 +41,40 @@ async function responseError(response: Response): Promise<Error> {
   return new Error(`Request failed (${response.status})`)
 }
 
+const STEP_TITLES = {
+  connect: {
+    title: 'Connect the data source',
+    lede: 'Use a read-only database account. The password is stored encrypted on this server.',
+  },
+  tables: {
+    title: 'Select tables to create data models',
+    lede: 'Models are built from the selected tables so the assistant understands your data.',
+  },
+  relationships: {
+    title: 'Define relationships',
+    lede: 'Foreign keys are added automatically. Review the generated model before saving.',
+  },
+  complete: {
+    title: 'Review and save the model',
+    lede: 'Your semantic model is saved. You can keep editing it or deploy it from Connect and model.',
+  },
+} as const
+
 export function SetupWizard({
   apiRequest,
   existingProject,
   draft,
   onDraftChange,
   onProjectCreated,
+  onModelSaved,
 }: {
   apiRequest: ApiRequest
   existingProject?: Project
   draft: Partial<ConnectionDraft>
   onDraftChange: (draft: Partial<ConnectionDraft>) => void
   onProjectCreated: () => void
+  /** Called after the draft model is saved, so the app can open the model editor. */
+  onModelSaved?: () => void
 }) {
   const [projectId, setProjectId] = useState(existingProject?.id ?? '')
   const [step, setStep] = useState<SetupStep>('connect')
@@ -217,10 +239,12 @@ export function SetupWizard({
         method: 'POST',
       })
       if (!response.ok) throw await responseError(response)
-      const result = (await response.json()) as { mdl: Mdl }
+      const result = (await response.json()) as { mdl: Mdl; warnings?: string[] }
       setDraftJson(JSON.stringify(result.mdl, null, 2))
       setStep('relationships')
-      setNotice('Draft created. Review descriptions and inferred relationships before saving.')
+      setNotice(
+        ['Draft created. Review descriptions and inferred relationships before saving.', ...(result.warnings ?? [])].join(' '),
+      )
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not profile the selected tables')
     } finally {
@@ -248,6 +272,7 @@ export function SetupWizard({
       setStep('complete')
       setNotice(`Semantic model revision ${saved.revision ?? 'saved'} is ready for review.`)
       onProjectCreated()
+      onModelSaved?.()
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not save the semantic model')
     } finally {
@@ -282,11 +307,6 @@ export function SetupWizard({
 
   return (
     <section className="setup-content" aria-label="Connect and model setup">
-      <span className="eyebrow">PROJECT SETUP</span>
-      <h1>{existingProject?.name ?? 'Connect a PostgreSQL database'}</h1>
-      <p className="setup-lede">
-        Test a read-only connection, select tables, then review and save the semantic model.
-      </p>
       <ol className="setup-progress">
         {(['connect', 'tables', 'relationships', 'complete'] as const).map((item, index) => (
           <li className={step === item ? 'active' : ''} key={item}>
@@ -294,6 +314,8 @@ export function SetupWizard({
           </li>
         ))}
       </ol>
+      <h1>{STEP_TITLES[step].title}</h1>
+      <p className="setup-lede">{STEP_TITLES[step].lede}</p>
       {error && <p className="setup-error" role="alert">{error}</p>}
       {notice && <p className="setup-notice" role="status">{notice}</p>}
       {step === 'connect' && (
@@ -375,25 +397,37 @@ export function SetupWizard({
             <button className="secondary-action" type="submit">Search</button>
           </form>
           <div className="catalog-list">
-            {filteredTables.map((table) => {
-              const key = `${table.schema}.${table.table}`
-              return (
-                <label className="catalog-item" key={key}>
-                  <input
-                    checked={selected.has(key)}
-                    onChange={(event) => setSelected((current) => {
-                      const updated = new Set(current)
-                      if (event.target.checked) updated.add(key)
-                      else updated.delete(key)
-                      return updated
-                    })}
-                    type="checkbox"
-                  />
-                  <span><strong>{key}</strong><small>{table.column_count} columns · ~{table.approx_rows.toLocaleString()} rows</small></span>
-                </label>
-              )
-            })}
-            {filteredTables.length === 0 && <p>No matching tables found.</p>}
+            <table className="catalog-table">
+              <thead>
+                <tr><th scope="col" /><th scope="col">Table</th><th className="num" scope="col">Approx. rows</th><th className="num" scope="col">Columns</th></tr>
+              </thead>
+              <tbody>
+                {filteredTables.map((table) => {
+                  const key = `${table.schema}.${table.table}`
+                  return (
+                    <tr className={selected.has(key) ? 'selected' : undefined} key={key}>
+                      <td>
+                        <input
+                          aria-label={`Select ${key}`}
+                          checked={selected.has(key)}
+                          onChange={(event) => setSelected((current) => {
+                            const updated = new Set(current)
+                            if (event.target.checked) updated.add(key)
+                            else updated.delete(key)
+                            return updated
+                          })}
+                          type="checkbox"
+                        />
+                      </td>
+                      <td className="mono">{key}</td>
+                      <td className="num mono">{table.approx_rows.toLocaleString()}</td>
+                      <td className="num mono">{table.column_count}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {filteredTables.length === 0 && <p className="setup-empty">No matching tables found.</p>}
           </div>
           <div className="table-pagination">
             <span>{tableTotal} tables · Page {tablePage} of {Math.max(1, Math.ceil(tableTotal / 50))}</span>
@@ -415,6 +449,12 @@ export function SetupWizard({
           <button className="primary-action" disabled={busy || selected.size === 0} onClick={() => void profileTables()} type="button">
             {busy ? 'Profiling…' : `Continue with ${selected.size} table${selected.size === 1 ? '' : 's'}`}
           </button>
+          {busy && (
+            <p className="side-panel-hint" role="status">
+              Profiling the tables and asking the local model for descriptions. This can take a few
+              minutes on CPU; tables it cannot finish are left for you to describe.
+            </p>
+          )}
         </section>
       )}
       {(step === 'relationships' || step === 'complete') && (
@@ -437,7 +477,9 @@ export function SetupWizard({
             )}
           </div>
           {draftJson ? (
-            <label>Semantic model JSON — edit descriptions or relationships, then validate and save
+            <label>{step === 'complete'
+              ? `Saved semantic model — edit and save again to create a new revision`
+              : 'Semantic model JSON — edit descriptions or relationships, then validate and save'}
               <textarea
                 className="mdl-editor"
                 onChange={(event) => setDraftJson(event.target.value)}

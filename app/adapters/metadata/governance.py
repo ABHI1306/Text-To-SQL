@@ -23,7 +23,10 @@ _POLICY_COLUMNS = (
 
 class PostgresGovernanceRepository:
     def __init__(self, dsn: str) -> None:
-        self._dsn = dsn
+        if not dsn:
+            raise ValueError("A metadata database URL is required")
+        # The API is configured with a SQLAlchemy-style URL; psycopg wants a plain one.
+        self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[DictRow]:
         return psycopg.connect(self._dsn, row_factory=dict_row)

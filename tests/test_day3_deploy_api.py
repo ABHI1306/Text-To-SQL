@@ -1,15 +1,24 @@
 from collections.abc import Sequence
+from typing import ClassVar
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.agent import factory
+from app.api import ask_routes
 from app.api import routes as api_routes
-from app.api.dependencies import get_current_context, get_repository
+from app.api.dependencies import (
+    get_audit_service,
+    get_current_context,
+    get_governance_repository,
+    get_repository,
+)
 from app.api.routes import router
 from app.auth.models import AuthContext
 from app.core.types import QueryResult, VectorMatch, VectorRecord
 from app.domain.mdl import Mdl
 from app.semantic.indexing import chunk_mdl
+from tests.support.audit import RecordingAudit
 
 PROJECT_ID = "00000000-0000-0000-0000-000000000020"
 USER_ID = "00000000-0000-0000-0000-000000000021"
@@ -79,9 +88,9 @@ class FakeLlm:
     def __init__(self, _url: str, _model: str) -> None:
         pass
 
-    def generate(self, prompt: str, *, temperature: float = 0.0) -> str:
-        del prompt, temperature
-        return '{"sql":"SELECT c.customer_id FROM ecommerce.customers AS c"}'
+    def generate(self, prompt: str, *, temperature: float = 0.0, schema: object = None) -> str:
+        del prompt, temperature, schema
+        return '{"logical_sql":"SELECT customer_id FROM customers"}'
 
 
 class FakeVectorStore:
@@ -130,17 +139,24 @@ class FakeVectorStore:
 
 
 class FakeWarehouse:
+    queries: ClassVar[list[object]] = []
+
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         pass
 
-    def execute_read_only(
-        self, query: object, *, max_rows: int
-    ) -> QueryResult:
+    def explain(self, query: object) -> None:
+        del query
+
+    def execute_read_only(self, query: object, *, max_rows: int) -> QueryResult:
         assert max_rows == 1000
-        assert query.sql == (
-            "SELECT c.customer_id FROM ecommerce.customers AS c"
-        )
+        FakeWarehouse.queries.append(query)
         return QueryResult(("customer_id",), ((101,), (102,)))
+
+
+class FakeGovernance:
+    def list_policies(self, project_id: str, *, enabled_only: bool = False) -> list[object]:
+        del project_id, enabled_only
+        return []
 
 
 def test_deploy_endpoint_indexes_and_activates_saved_revision(monkeypatch) -> None:
@@ -179,28 +195,28 @@ def test_deploy_endpoint_indexes_and_activates_saved_revision(monkeypatch) -> No
     assert repository.active == 2
 
 
-def test_project_query_endpoint_returns_live_database_result_shape(monkeypatch) -> None:
+def _ask_client(monkeypatch, capabilities: set[str]):  # type: ignore[no-untyped-def]
     repository = FakeRepository()
     repository.active = 2
     context = AuthContext(
         user_id=USER_ID,
         username="dba",
         role_name="DBA",
-        capabilities=frozenset({"ask_question"}),
+        capabilities=frozenset(capabilities),
         project_ids=frozenset({PROJECT_ID}),
         must_change_password=False,
     )
-    monkeypatch.setattr(api_routes, "QdrantVectorStoreAdapter", FakeVectorStore)
-    monkeypatch.setattr(api_routes, "OllamaEmbedderAdapter", lambda *_: FakeEmbedder())
-    monkeypatch.setattr(api_routes, "OllamaLLMAdapter", FakeLlm)
-    monkeypatch.setattr(api_routes, "PostgresWarehouseAdapter", FakeWarehouse)
+    monkeypatch.setattr(factory, "QdrantVectorStoreAdapter", FakeVectorStore)
+    monkeypatch.setattr(factory, "OllamaEmbedderAdapter", lambda *_: FakeEmbedder())
+    monkeypatch.setattr(factory, "OllamaLLMAdapter", FakeLlm)
+    monkeypatch.setattr(factory, "PostgresWarehouseAdapter", FakeWarehouse)
     monkeypatch.setattr(
         api_routes,
         "_project_connection_details",
         lambda _repository, _project_id: ({}, "postgresql://warehouse", None),
     )
     monkeypatch.setattr(
-        api_routes,
+        factory,
         "get_settings",
         lambda: type(
             "SettingsStub",
@@ -215,25 +231,46 @@ def test_project_query_endpoint_returns_live_database_result_shape(monkeypatch) 
             },
         )(),
     )
+    audit = RecordingAudit()
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(ask_routes.router)
     app.dependency_overrides[get_current_context] = lambda: context
     app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_governance_repository] = lambda: FakeGovernance()
+    app.dependency_overrides[get_audit_service] = lambda: audit
+    FakeWarehouse.queries.clear()
+    return TestClient(app), audit
 
-    with TestClient(app) as client:
-        response = client.post(
-            f"/api/v1/projects/{PROJECT_ID}/query",
-            json={"question": "Show customer IDs"},
-        )
+
+def test_project_query_goes_through_the_compiler_and_hides_compiled_sql(monkeypatch) -> None:
+    client, audit = _ask_client(monkeypatch, {"ask_question"})
+    response = client.post(f"/api/v1/projects/{PROJECT_ID}/query", json={"question": "Show customer IDs"})
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
-        "sql": "SELECT c.customer_id FROM ecommerce.customers AS c",
-        "columns": ["customer_id"],
-        "rows": [[101], [102]],
-        "retrieved_models": ["customers"],
-        "model_version": 2,
-        "elapsed_ms": response.json()["elapsed_ms"],
-        "truncated": False,
-        "source": "postgresql",
-    }
+    body = response.json()
+    assert body["logical_sql"] == "SELECT customer_id FROM customers"
+    assert "sql" not in body  # compiled SQL needs rerun_sql
+    assert body["columns"] == ["customer_id"] and body["rows"] == [[101], [102]]
+    assert body["retrieved_models"] == ["customers"] and body["model_version"] == 2
+    executed = FakeWarehouse.queries[0].sql  # type: ignore[attr-defined]
+    assert "FROM ecommerce.customers" in executed and "m_customers" in executed
+    assert audit.actions() == ["question_asked"]
+    assert audit.events[0]["details"]["ok"] is True
+
+
+def test_accounts_with_rerun_sql_also_get_the_compiled_sql(monkeypatch) -> None:
+    client, _ = _ask_client(monkeypatch, {"ask_question", "rerun_sql"})
+    body = client.post(f"/api/v1/projects/{PROJECT_ID}/query", json={"question": "Show customer IDs"}).json()
+    assert body["sql"].startswith("WITH m_customers AS")
+
+
+def test_query_stream_emits_the_ordered_events(monkeypatch) -> None:
+    client, _ = _ask_client(monkeypatch, {"ask_question"})
+    with client.stream(
+        "POST", f"/api/v1/projects/{PROJECT_ID}/query/stream", json={"question": "Show customer IDs"}
+    ) as response:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        raw = "".join(response.iter_text())
+    events = [line.removeprefix("event: ") for line in raw.splitlines() if line.startswith("event: ")]
+    assert events == ["retrieval", "sql_candidate", "compilation", "validation", "rows", "done"]
+    assert '"sql"' not in raw.split("event: compilation")[1].split("event: validation")[0]

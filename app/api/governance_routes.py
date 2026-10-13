@@ -42,6 +42,7 @@ AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 EditMdlContext = Annotated[AuthContext, Depends(require_capability("edit_mdl"))]
 ManagePoliciesContext = Annotated[AuthContext, Depends(require_capability("manage_policies"))]
 DeployMdlContext = Annotated[AuthContext, Depends(require_capability("deploy_mdl"))]
+ManageRolesContext = Annotated[AuthContext, Depends(require_capability("manage_roles"))]
 ViewAuditContext = Annotated[AuthContext, Depends(require_capability("view_audit"))]
 
 
@@ -289,6 +290,7 @@ def create_row_policy(
             mdl=_policy_mdl(repository, project_id),
             test_principal=test_principal,
             actor_id=context.user_id,
+            known_roles=_role_names(repository),
         )
     except PolicyRejected as error:
         raise _rejection(error) from error
@@ -317,6 +319,7 @@ def update_row_policy(
             mdl=_policy_mdl(repository, project_id),
             test_principal=test_principal,
             actor_id=context.user_id,
+            known_roles=_role_names(repository),
         )
     except PolicyNotFound as error:
         raise HTTPException(status_code=404, detail="Policy not found") from error
@@ -343,6 +346,10 @@ def delete_row_policy(
     except PolicyNotFound as error:
         raise HTTPException(status_code=404, detail="Policy not found") from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _role_names(repository: PostgresMetadataRepository) -> list[str]:
+    return [str(role["name"]) for role in repository.list_roles()]
 
 
 def _policy_or_422(body: PolicyRequest) -> RowPolicy:
@@ -403,3 +410,50 @@ def browse_audit(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"items": [_audit_json(item) for item in page.items], "nextCursor": page.next_cursor}
+
+
+class MappingItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    match: str = Field(min_length=1, max_length=512)
+    role: str = Field(min_length=1, max_length=128)
+
+
+class IdentityMappingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(pattern="^(ldap|oidc)$")
+    mappings: list[MappingItem] = Field(max_length=200)
+
+
+@router.get("/identity/mappings")
+def list_identity_mappings(
+    _context: ManageRolesContext,
+    repository: RepositoryDependency,
+) -> dict[str, object]:
+    return {"items": repository.list_identity_mappings()}
+
+
+@router.put("/identity/mappings")
+def replace_identity_mappings(
+    body: IdentityMappingsRequest,
+    context: ManageRolesContext,
+    repository: RepositoryDependency,
+) -> dict[str, object]:
+    """Replace a source's group-to-role mappings; they are re-applied at each login."""
+    matches = [item.match.casefold() for item in body.mappings]
+    if len(set(matches)) != len(matches):
+        raise HTTPException(status_code=422, detail="Each group may be mapped once")
+    for item in body.mappings:
+        capabilities = repository.get_role_capabilities(item.role)
+        if capabilities is None:
+            raise HTTPException(status_code=422, detail=f"Role {item.role!r} does not exist")
+        if not capabilities <= context.capabilities:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot map a role holding capabilities the current user does not hold",
+            )
+    repository.replace_identity_mappings(
+        body.source, [(item.match, item.role) for item in body.mappings], actor_id=context.user_id
+    )
+    return {"source": body.source, "mappings": [item.model_dump() for item in body.mappings]}

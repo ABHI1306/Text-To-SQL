@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 
 import { hasCapability } from './api/access'
 import type { components } from './api/schema'
+import { AnswerPanel } from './AnswerPanel'
+import { streamQuestion, type AnswerRun } from './askStream'
 import { ModelCanvas } from './ModelCanvas'
 import { PasswordField } from './PasswordField'
 import { ProfileMenu } from './ProfileMenu'
@@ -58,25 +60,6 @@ const reviewRoles: ReviewRole[] = ['DBA', 'Admin', 'User', 'Custom: Analyst+']
 const reviewStates = ['Success', 'Streaming', 'Clarifying', 'Out of scope', 'Typed failure', 'Empty result', 'LLM unavailable']
 const setupSteps = ['Choose source', '1 Connect', '2 Tables', '3 Relationships']
 
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) return 'NULL'
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-  return JSON.stringify(value) ?? String(value)
-}
-
-type QueryAnswer = {
-  sql: string
-  columns: string[]
-  rows: unknown[][]
-  retrieved_models: string[]
-  model_version: number
-  elapsed_ms: number
-  truncated: boolean
-  source: 'postgresql' | 'mock'
-}
-
 function App() {
   const [profile, setProfile] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -94,13 +77,10 @@ function App() {
   const [threadHistory, setThreadHistory] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
-  const [showSql, setShowSql] = useState(false)
-  const [queryAnswer, setQueryAnswer] = useState<QueryAnswer | null>(null)
+  const [run, setRun] = useState<AnswerRun | null>(null)
   const [queryError, setQueryError] = useState<string | null>(null)
-  const [queryBusy, setQueryBusy] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
   const [userPreview, setUserPreview] = useState('Myself')
-  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [reviewRole, setReviewRole] = useState<ReviewRole>('DBA')
   const [reviewTheme, setReviewTheme] = useState<ReviewTheme>('Light')
@@ -262,7 +242,7 @@ function App() {
       setSessionExpired(false)
       setLoginPassword('')
       setActivePage('Home')
-      setQueryAnswer(null)
+      setRun(null)
       setThreadHistory([])
     }
   }
@@ -289,37 +269,27 @@ function App() {
       trimmed,
       ...history.filter((item) => item !== trimmed),
     ].slice(0, 20))
-    setQueryAnswer(null)
+    setRun(null)
     setQueryError(null)
     setNotice(null)
-    setQueryBusy(true)
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     try {
-      const response = await apiRequest(`/api/v1/projects/${projectId}/query`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ question: trimmed }),
-      })
-      if (!response.ok) {
-        const failure = (await response.json()) as { detail?: unknown }
-        const message = typeof failure.detail === 'string'
-          ? failure.detail
-          : `Question failed (${response.status})`
-        throw new Error(message)
-      }
-      setQueryAnswer((await response.json()) as QueryAnswer)
+      await streamQuestion(apiRequest, projectId, trimmed, setRun, controller.signal)
     } catch (reason: unknown) {
-      setQueryError(reason instanceof Error ? reason.message : 'Question failed')
-    } finally {
-      setQueryBusy(false)
+      if (controller.signal.aborted) {
+        setRun((current) => current && current.status === 'running'
+          ? { ...current, status: 'error', error: { code: 'STOPPED', message: 'You stopped this question.', retryable: false } }
+          : current)
+      } else {
+        setQueryError(reason instanceof Error ? reason.message : 'Question failed')
+        setRun(null)
+      }
     }
   }
 
-  async function copySql(sql: string) {
-    await navigator.clipboard.writeText(sql)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1600)
-  }
-
+  const busy = run?.status === 'running'
   const selectedProject = profile?.projects[0]?.name ?? 'Loading project'
   const username = profile?.username ?? 'Loading account'
   const selectedProjectId = profile?.projects[0]?.id
@@ -543,7 +513,7 @@ function App() {
             <aside className="thread-sidebar">
               <button className="new-thread-button" onClick={() => {
                 setActiveThread(null)
-                setQueryAnswer(null)
+                setRun(null)
                 setQueryError(null)
                 setNotice(null)
               }} type="button">
@@ -578,7 +548,7 @@ function App() {
 
             <section className="conversation" aria-label="Question and answer">
               <div className="conversation-scroll">
-                {!activeThread && !queryBusy && (
+                {!activeThread && !busy && (
                   <div className="conversation-empty">
                     <span className="eyebrow">ASK YOUR DATA</span>
                     <h1>What would you like to know?</h1>
@@ -592,91 +562,21 @@ function App() {
                     <div className="question-bubble">{activeThread}</div>
                   </div>
                 )}
-                {queryBusy && <div className="query-progress" role="status">Retrieving the deployed model and querying PostgreSQL…</div>}
                 {queryError && <div className="query-error" role="alert">{queryError}</div>}
                 {notice && <div className="preview-notice" role="status">{notice}</div>}
-                {queryAnswer && (
-                  <div className="result-content">
-                    <div className="result-labels">
-                      <span className="computed-label">
-                        {queryAnswer.source === 'postgresql' ? 'PostgreSQL results' : 'Mock preview data'}
-                      </span>
-                      <span className="model-label">
-                        {queryAnswer.retrieved_models.join(' · ')} · model v{queryAnswer.model_version}
-                      </span>
-                    </div>
-                    <section className="trace-card" aria-label="Question execution steps">
-                      <div className="trace-heading">
-                        <strong>Query completed · {queryAnswer.elapsed_ms} ms</strong>
-                      </div>
-                      <div className="trace-steps">
-                        {[
-                          ['Retrieval', queryAnswer.retrieved_models.join(', ')],
-                          ['SQL safety check', 'Single read-only query; retrieved tables and columns checked'],
-                          ['PostgreSQL', `${queryAnswer.rows.length} row${queryAnswer.rows.length === 1 ? '' : 's'} returned${queryAnswer.truncated ? ' (results capped)' : ''}`],
-                        ].map(([title, detail]) => (
-                          <div className="trace-step done" key={title}>
-                            <span className="step-status" aria-hidden="true">✓</span>
-                            <div className="step-body">
-                              <div className="step-main"><strong>{title}</strong><span>{detail}</span></div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                    <section className="data-card">
-                      <div className="data-card-heading">
-                        <strong>Query results</strong>
-                        <div>
-                          <span>{queryAnswer.rows.length} rows</span>
-                          {queryAnswer.truncated && <span className="truncate-label">Showing first {queryAnswer.rows.length} rows</span>}
-                        </div>
-                      </div>
-                      {showSql ? (
-                        <pre className="sql-viewer"><code>{queryAnswer.sql}</code></pre>
-                      ) : queryAnswer.columns.length === 0 ? (
-                        <p className="no-results">The query returned no tabular columns.</p>
-                      ) : (
-                        <div className="table-scroll">
-                          <table>
-                            <thead><tr>{queryAnswer.columns.map((column, index) => <th key={`${column}-${index}`}>{column}</th>)}</tr></thead>
-                            <tbody>
-                              {queryAnswer.rows.map((row, rowIndex) => (
-                                <tr key={rowIndex}>
-                                  {queryAnswer.columns.map((column, columnIndex) => (
-                                    <td key={`${column}-${columnIndex}`}>{formatCell(row[columnIndex])}</td>
-                                  ))}
-                                </tr>
-                              ))}
-                              {queryAnswer.rows.length === 0 && (
-                                <tr><td colSpan={queryAnswer.columns.length}>No rows matched this question.</td></tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </section>
-                    <div className="answer-toolbar">
-                      <div className="sql-actions">
-                        <button className={!showSql ? 'selected' : ''} onClick={() => setShowSql(false)} type="button">Results</button>
-                        <button className={showSql ? 'selected' : ''} onClick={() => setShowSql(true)} type="button">SQL</button>
-                      </div>
-                    </div>
-                    <div className="result-actions">
-                      <button onClick={() => void submitQuestion(activeThread ?? '')} type="button">Re-run</button>
-                      <button onClick={() => void copySql(queryAnswer.sql)} type="button">{copied ? 'Copied' : 'Copy SQL'}</button>
-                      <span className="action-divider" />
-                      <button aria-label="Good answer" className={feedback === 'up' ? 'feedback-selected' : ''} onClick={() => setFeedback('up')} type="button">👍</button>
-                      <button aria-label="Poor answer" className={feedback === 'down' ? 'feedback-selected' : ''} onClick={() => setFeedback('down')} type="button">👎</button>
-                    </div>
-                  </div>
+                {run && (
+                  <AnswerPanel
+                    run={run}
+                    onAsk={(question) => void submitQuestion(question)}
+                    onRerun={() => void submitQuestion(activeThread ?? '')}
+                  />
                 )}
               </div>
 
               <div className="composer-area">
                 <div className="suggestion-list">
                   {suggestions.map((suggestion) => (
-                    <button disabled={!selectedProjectId || queryBusy} key={suggestion} onClick={() => void submitQuestion(suggestion)} type="button">{suggestion}</button>
+                    <button disabled={!selectedProjectId || busy} key={suggestion} onClick={() => void submitQuestion(suggestion)} type="button">{suggestion}</button>
                   ))}
                 </div>
                 <form className="question-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion() }}>
@@ -684,6 +584,7 @@ function App() {
                     aria-label="Ask a question about your data"
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => {
+                      if (event.key === 'Escape') abortRef.current?.abort()
                       if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault()
                         void submitQuestion()
@@ -693,7 +594,7 @@ function App() {
                     rows={2}
                     value={query}
                   />
-                  <button className="send-button" disabled={!query.trim() || queryBusy || !selectedProjectId} type="submit">{queryBusy ? '…' : 'Send'}</button>
+                  <button className="send-button" disabled={!query.trim() || busy || !selectedProjectId} type="submit">{busy ? '…' : 'Send'}</button>
                 </form>
                 <div className="composer-footer">
                   <span>Enter to send · Shift+Enter for a new line · Esc to stop</span>
@@ -720,6 +621,7 @@ function App() {
             draft={connectionDraft}
             existingProject={profile.projects[0]}
             onDraftChange={setConnectionDraft}
+            onModelSaved={() => setActivePage('Connect and model')}
             onProjectCreated={() => {
               if (accessToken) {
                 void loadProfile(accessToken).then(setProfile).catch((reason: unknown) => {

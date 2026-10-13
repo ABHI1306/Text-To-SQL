@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import httpx
 
 
@@ -17,14 +19,20 @@ class OllamaLLMAdapter:
         self._model = model
         self._timeout = timeout_seconds
 
-    def generate(self, prompt: str, *, temperature: float = 0.0) -> str:
+    def generate(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.0,
+        schema: Mapping[str, object] | None = None,
+    ) -> str:
         try:
             response = httpx.post(
                 f"{self._base_url}/api/generate",
                 json={
                     "model": self._model,
                     "prompt": prompt,
-                    "format": "json",
+                    "format": dict(schema) if schema is not None else "json",
                     "stream": False,
                     "options": {"temperature": temperature},
                 },

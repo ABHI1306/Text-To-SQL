@@ -1,0 +1,47 @@
+# Demo directory for LDAP login tests (identity-demo profile). Passwords are for the demo only.
+dn: ou=people,dc=example,dc=org
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=org
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=asha,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: asha
+cn: Asha Rao
+sn: Rao
+mail: asha@example.org
+departmentNumber: sales
+l: West
+userPassword: demo-asha-password
+
+dn: uid=ravi,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: ravi
+cn: Ravi Shah
+sn: Shah
+mail: ravi@example.org
+departmentNumber: operations
+l: South
+userPassword: demo-ravi-password
+
+dn: uid=mina,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: mina
+cn: Mina Das
+sn: Das
+mail: mina@example.org
+l: West
+userPassword: demo-mina-password
+
+dn: cn=text2sql-analysts,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: text2sql-analysts
+member: uid=asha,ou=people,dc=example,dc=org
+
+dn: cn=text2sql-dbas,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: text2sql-dbas
+member: uid=ravi,ou=people,dc=example,dc=org

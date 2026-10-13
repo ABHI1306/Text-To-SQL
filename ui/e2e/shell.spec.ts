@@ -67,16 +67,15 @@ test('login form appears when there is no refresh session', async ({ page }) => 
 test('project setup profiles selected tables and saves the semantic model', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Setup', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'E-commerce demo' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Select tables to create data models' })).toBeVisible()
   await page.getByLabel('Search tables').fill('customers')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByLabel('ecommerce.customers').check()
   await page.getByRole('button', { name: 'Continue with 1 table' }).click()
   await expect(page.getByText('Draft created. Review descriptions')).toBeVisible()
   await page.getByRole('button', { name: 'Validate and save model' }).click()
-  await expect(page.getByText('Semantic model revision 1 is ready for review.')).toBeVisible()
 
-  await page.getByLabel('Review screen').selectOption('Connect and model')
+  // Saving the draft opens the model editor without any further navigation.
   await expect(page.getByRole('heading', { name: 'Connect and model' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Model relationship canvas' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Save model' })).toBeDisabled()
@@ -87,7 +86,7 @@ test('project setup profiles selected tables and saves the semantic model', asyn
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   await page.getByLabel('Ask a question about your data').fill('Show customer names')
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(page.getByText('Mock preview data')).toBeVisible()
+  await expect(page.getByText('PostgreSQL results')).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'first_name' })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Mock customer' })).toBeVisible()
 })

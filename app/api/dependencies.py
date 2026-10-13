@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.adapters.identity.ldap import LdapConfig, LdapDirectory
 from app.adapters.metadata.governance import PostgresGovernanceRepository
 from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.audit.service import AuditService
@@ -15,7 +16,7 @@ from app.auth.service import (
     AuthService,
     PasswordChangeRequired,
 )
-from app.config import get_settings
+from app.config import Settings, get_settings
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -31,6 +32,30 @@ def get_repository() -> PostgresMetadataRepository:
     return PostgresMetadataRepository(settings.metadata_database_url)
 
 
+def build_directory(settings: Settings) -> LdapDirectory | None:
+    """The LDAP directory when LDAP_URI is set; local accounts only otherwise."""
+    if not settings.ldap_uri:
+        return None
+    attribute_map = dict(
+        pair.split("=", 1) for pair in settings.ldap_attribute_map.split(",") if "=" in pair
+    )
+    return LdapDirectory(
+        LdapConfig(
+            uri=settings.ldap_uri,
+            service_dn=settings.ldap_service_dn,
+            service_password=settings.ldap_service_password,
+            user_base_dn=settings.ldap_user_base_dn,
+            user_filter=settings.ldap_user_filter,
+            group_base_dn=settings.ldap_group_base_dn,
+            group_filter=settings.ldap_group_filter,
+            attribute_map=attribute_map,
+            start_tls=settings.ldap_start_tls,
+            allow_insecure=settings.ldap_allow_insecure,
+            ca_cert_file=settings.ldap_ca_cert_file or None,
+        )
+    )
+
+
 @lru_cache
 def get_auth_service() -> AuthService:
     settings = get_settings()
@@ -39,8 +64,11 @@ def get_auth_service() -> AuthService:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication is not configured; set JWT_SECRET",
         )
+    repository = get_repository()
     return AuthService(
-        get_repository(),
+        repository,
+        directory=build_directory(settings),
+        identity_repository=repository,
         jwt_secret=settings.jwt_secret,
         access_token_ttl_seconds=settings.access_token_ttl_seconds,
         refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,

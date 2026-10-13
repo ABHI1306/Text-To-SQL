@@ -160,3 +160,75 @@ the administration capabilities `manage_users`, `manage_roles`, `view_audit`, `r
   compiles every calculated field, metric and relationship. A failing compile blocks the Deploy
   button in the UI only; `POST /deploy` itself does not yet re-check it, and the plan's
   golden-set description gate is still not enforced.
+
+## Day 5: question graph, row-level enforcement and LDAP
+
+- **Only route to rows.** `app/agent/graph.py` (LangGraph `StateGraph`): retrieve_context ->
+  generate_sql -> compile_sql -> validate_sql -> execute_sql, with correct_sql looping back
+  through the compiler (at most 3 corrections) and structured_failure as the only other end.
+  `QuestionService` (the Day 3 path that executed model-written physical SQL) is deleted;
+  `POST /projects/{id}/query` and the new `.../query/stream` (SSE) both run the graph. The
+  topology is asserted in `tests/test_agent_graph.py`. Added over the plan's drawing: generate_sql
+  and retrieve_context can go straight to structured_failure (LLM down, nothing retrieved).
+  Not built yet (Day 6/7): rewrite_followup, classify_intent, summarize, respond, ask_user and
+  the `clarification`/`suggestions` events (the UI already renders them).
+- **Validator** (`app/semantic/validator.py`): a pure allowlist over the compiled SQL, then an
+  `EXPLAIN` dry run through `WarehousePort.explain`. A dry-run error reaches the model only as
+  `DRY_RUN_FAILED (SQLSTATE x)`, because PostgreSQL's text names physical objects.
+- **Prompt hardening found by tests.** A question containing `</question>` could close its own
+  delimiter; `<` and `>` are now escaped in the JSON-encoded question. The model never sees
+  physical names or policies (asserted).
+- **The adversarial review found a real bypass**, fixed: a WITH name equal to a catalog view
+  (`WITH pg_user AS (SELECT * FROM pg_user) SELECT * FROM pg_user`) passed both the compiler and
+  the validator, because "is this a CTE reference" was decided by name instead of by SQL scoping.
+  It is now decided by sqlglot scopes (`cte_reference_ids`) in both. Also fixed: deep nesting
+  crashed with `RecursionError` (now a typed error, input capped at 20,000 characters); the
+  function **blocklist became an allowlist for functions sqlglot does not model**
+  (`ALLOWED_UNTYPED_FUNCTIONS`), plus `generate_series` everywhere, `reg*` casts and
+  `current_catalog`; token-prefix collision between attributes `a` and `a__b`; policy predicates
+  now obey the function rules; policy role names match case-insensitively and a policy scoped to a
+  role that does not exist is rejected at save (it would otherwise apply to nobody).
+  Remaining by design: any non-empty `appliesTo.roles` leaves other roles unrestricted, and the
+  allowlist is still a judgement about which functions are safe, not a proof.
+- **Safety suites.** Red-team set: 30 cases (`tests/data/redteam_cases.json`), all blocked or
+  neutralized without reaching the database. Row-level security suite: 39 query shapes x 3 users =
+  117 cases plus 2 sanity tests, each compared with an independent hand-written physical oracle on
+  PostgreSQL; removing the policies makes 102 of them fail, so the suite does detect leaks. Paths
+  that do not exist yet (dashboards, scheduled runs, shared views, cached results, follow-ups) are
+  not covered and must be added when they are built.
+- **LDAP** (`app/adapters/identity/ldap.py`, ldap3): service bind, unique user search with an
+  escaped filter, user bind, groups (`memberOf` and a group search), attribute mapping to policy
+  attributes. LDAPS or StartTLS with certificate verification is required (`allow_insecure` is
+  for tests). Empty passwords never reach the server (anonymous bind). A directory outage is a
+  generic login failure, never a fallback to another method. Accounts are created on first login
+  with `auth_source='ldap'` and no password; a local username is never taken over, and local
+  accounts never consult the directory. Roles come from `identity_mappings` (first matching
+  mapping in creation order), re-applied at every login; removal from a group removes the role at
+  the next login (an already issued access token keeps its role until it expires; the role is
+  re-read on each request).
+  Directory-mapped attributes replace earlier directory-sourced ones; manual attributes win.
+  Verified against the OpenLDAP demo container (compose profile `identity-demo`,
+  `docker-compose.ldap.yml`, `scripts/ldap/make-certs.sh`; the image's own CA expired in
+  Jan 2026) and through the real API login.
+- **Bug found by running it for real**: the Day 4 governance repository did not accept the API's
+  `postgresql+psycopg://` URL, so every Day 4 endpoint and audit write would have failed in the
+  composed stack while the unit and live tests (plain DSN) passed.
+- **Dependencies**: `langgraph` and `ldap3` added; resolving them moved `websockets` from 17.2 to
+  16.1.1.
+- **Execution accuracy (provisional)**: with `llama3:latest`, 15 scorable e-commerce cases:
+  3 correct (20%), 9 wrong rows, 3 failed after 3 corrections; first-attempt validity 47%,
+  correction success 62%, latency p50 69 s / p95 116 s on this CPU. All are below the plan's
+  targets (70% accuracy, 20 s p50). Four references (ecom-14, 15, 16, 24) did not compile and are
+  unscored. Rows are compared exactly, so an answer with different columns than the reference
+  counts as wrong even when reasonable (e.g. category_id instead of category name). Details:
+  `reports/day5-baseline-provisional-20261013.json`. The SQL-model choice (Qwen2.5-Coder etc.)
+  is still undecided and is the main lever.
+  Earlier note: see `reports/day5-baseline-*.json`. The references in
+  `tests/data/execution_references.json` are developer drafts, not DBA-approved, so the number is
+  provisional; five of the 24 e-commerce cases cannot be answered from the demo schema at all.
+- **Not done**: OIDC (Day 6), the preview-as-user selector in the chat screen is still a design
+  placeholder, `rerun_sql` re-runs by asking the question again (no endpoint re-executes stored
+  SQL yet), and the sql-safety-reviewer / rls-reviewer agents from the plan do not exist here, so
+  two adversarial review passes were run with general-purpose agents instead. The human checkpoint
+  (line-by-line review of the compiler and validator, ten hostile queries as a restricted user)
+  is still yours.

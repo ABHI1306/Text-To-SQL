@@ -103,6 +103,31 @@ services:
         condition: service_healthy
     networks: [local]
 
+  openldap:
+    image: osixia/openldap:1.5.0
+    profiles: ["identity-demo"]
+    hostname: ldap.example.org
+    command: ["--copy-service"]
+    environment:
+      LDAP_ORGANISATION: Example
+      LDAP_DOMAIN: example.org
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:-}
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: svc-text2sql
+      LDAP_READONLY_USER_PASSWORD: ${LDAP_SERVICE_PASSWORD:-}
+      LDAP_TLS: "true"
+      LDAP_TLS_VERIFY_CLIENT: never
+      LDAP_TLS_CRT_FILENAME: ldap.crt
+      LDAP_TLS_KEY_FILENAME: ldap.key
+      LDAP_TLS_CA_CRT_FILENAME: ca.crt
+      LDAP_TLS_DH_PARAM_FILENAME: dhparam.pem
+    volumes:
+      - ./scripts/ldap/certs:/container/service/slapd/assets/certs
+      - ./scripts/ldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-demo.ldif:ro
+    networks:
+      local:
+        aliases: [ldap.example.org]
+
   migrate:
     build:
       context: .

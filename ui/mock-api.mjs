@@ -56,6 +56,43 @@ const server = createServer(async (request, response) => {
 
   if (
     request.method === 'POST'
+    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/query\/stream$/)
+  ) {
+    const question = String(JSON.parse(body || '{}').question ?? '')
+    const send = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)
+    const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    if (!activeRevision) {
+      send('error', { code: 'NO_MODEL', message: 'Deploy a semantic model before asking questions', retryable: false })
+      response.end()
+      return
+    }
+    send('retrieval', { models: ['customers'], pairs: [], instructions: [], ms: 12 })
+    await pause(40)
+    if (/clarify/i.test(question)) {
+      send('clarification', { question: 'Which customers do you mean?', options: ['All customers', 'Active customers'] })
+      response.end()
+      return
+    }
+    send('sql_candidate', { logical_sql: 'SELECT customer_id, first_name FROM customers ORDER BY customer_id', attempt: 1, ms: 30 })
+    await pause(40)
+    if (/fail/i.test(question)) {
+      send('compilation', { ok: false, errors: [{ code: 'UNKNOWN_COLUMN', message: "Column 'x' could not be resolved" }], ms: 4 })
+      send('error', { code: 'UNKNOWN_COLUMN', message: "Column 'x' could not be resolved", retryable: false })
+      response.end()
+      return
+    }
+    send('compilation', { ok: true, errors: [], sql: 'WITH m_customers AS (SELECT customer_id, first_name FROM ecommerce.customers) SELECT customer_id, first_name FROM m_customers AS customers ORDER BY customer_id LIMIT 1000', ms: 4 })
+    send('validation', { ok: true, errors: [], ms: 9 })
+    await pause(40)
+    send('rows', { columns: ['customer_id', 'first_name'], rows: [[1, 'Mock customer'], [2, 'Preview customer']], truncated: false, row_count: 2, ms: 11 })
+    send('done', { message_id: 'm1', latency_ms: 106, attempts: 0 })
+    response.end()
+    return
+  }
+
+  if (
+    request.method === 'POST'
     && ['/api/v1/auth/login', '/api/v1/auth/refresh'].includes(url.pathname)
   ) {
     payload = {

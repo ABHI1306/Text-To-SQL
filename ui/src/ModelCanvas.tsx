@@ -117,15 +117,14 @@ export function ModelCanvas({
     <section className="model-workspace" aria-label="Semantic model editor">
       <header className="model-toolbar">
         <div>
-          <span className="eyebrow">SEMANTIC MODEL</span>
           <h1>Connect and model</h1>
           <p>
-            Drag cards to arrange them, drag between cards to relate them, and select anything to edit it.
+            {draft ? `${draft.models.length} models · ` : ''}Drag cards to arrange them, drag between cards to relate them, and select anything to edit it.
             {dirty && ' You have unsaved changes.'}
           </p>
         </div>
         <div className="model-toolbar-actions">
-          <button disabled={!draft || busy || !dirty || incomplete} onClick={() => void save()} type="button">
+          <button className="primary" disabled={!draft || busy || !dirty || incomplete} onClick={() => void save()} type="button">
             {busy ? 'Saving…' : 'Save model'}
           </button>
         </div>
@@ -169,15 +168,20 @@ export function ModelCanvas({
               busy={busy}
             />
           )}
-          <ul className="model-node-list" aria-label="Models in this project">
-            {draft.models.map((model) => (
-              <li key={model.name}>
-                <strong>{model.name}</strong>
-                <span>{model.tableReference}</span>
-                <span>{model.columns.length} columns</span>
-              </li>
-            ))}
-          </ul>
+          <table className="model-node-table" aria-label="Models in this project">
+            <thead>
+              <tr><th scope="col">Model</th><th scope="col">Table</th><th className="num" scope="col">Columns</th></tr>
+            </thead>
+            <tbody>
+              {draft.models.map((model) => (
+                <tr key={model.name}>
+                  <td className="mono"><strong>{model.name}</strong></td>
+                  <td className="mono muted">{model.tableReference}</td>
+                  <td className="num mono">{model.columns.length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </>
       )}
     </section>

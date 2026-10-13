@@ -13,6 +13,7 @@ class AuthUser:
     status: str
     must_change_password: bool
     locked_until: datetime | None
+    auth_source: str = "local"
 
 
 @dataclass(frozen=True)

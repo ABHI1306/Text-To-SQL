@@ -89,8 +89,8 @@ test('canvas renders the demo model and saves moved node positions', async ({ pa
 
   await expect(page.locator('.react-flow__node')).toHaveCount(3)
   await expect(page.locator('.react-flow__edge')).toHaveCount(2)
-  const models = page.getByRole('list', { name: 'Models in this project' })
-  await expect(models.getByRole('listitem')).toHaveCount(3)
+  const models = page.getByRole('table', { name: 'Models in this project' })
+  await expect(models.locator('tbody tr')).toHaveCount(3)
 
   const node = page.locator('.react-flow__node').filter({ hasText: 'orders' }).first()
   const box = await node.boundingBox()

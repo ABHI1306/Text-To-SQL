@@ -249,6 +249,9 @@ class FakeRepository:
     def get_active_mdl_version(self, project_id: str) -> int | None:
         return None
 
+    def list_roles(self) -> list[dict[str, object]]:
+        return [{"name": "User"}, {"name": "DBA"}]
+
     def get_auth_context(self, user_id: str) -> AuthContext | None:
         if user_id != TEST_USER_ID:
             return None
@@ -480,3 +483,31 @@ def test_deploy_report_route_requires_deploy_mdl() -> None:
     allowed, _, _ = client({"deploy_mdl"})
     body = allowed.get(f"{BASE}/deploy-report").json()
     assert body["revision"] == 1 and body["deployable"] is True
+
+
+def test_governance_repository_accepts_the_apis_sqlalchemy_style_url() -> None:
+    from app.adapters.metadata.governance import PostgresGovernanceRepository
+
+    repository = PostgresGovernanceRepository("postgresql+psycopg://u:p@host:5432/metadata")
+    assert repository._dsn == "postgresql://u:p@host:5432/metadata"
+    with pytest.raises(ValueError, match="required"):
+        PostgresGovernanceRepository("")
+
+
+def test_a_policy_scoped_to_a_role_that_does_not_exist_is_rejected() -> None:
+    result = validate_policy(
+        policy(appliesTo={"roles": ["Analist"]}),
+        build_mdl(),
+        build_principal("u", {"region": "EU"}),
+        KNOWN,
+        known_roles=["User", "Analyst"],
+    )
+    assert not result.ok and "unknown role" in result.errors[0].message
+    ok = validate_policy(
+        policy(appliesTo={"roles": ["analyst"], "exemptRoles": ["USER"]}),
+        build_mdl(),
+        build_principal("u", {"region": "EU"}),
+        KNOWN,
+        known_roles=["User", "Analyst"],
+    )
+    assert ok.ok

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from app.core.types import AuditEvent, Principal
@@ -43,8 +44,9 @@ class PolicyService:
         mdl: Mdl,
         test_principal: Principal,
         actor_id: str,
+        known_roles: Collection[str] | None = None,
     ) -> SavedPolicy:
-        validation = self._validate(policy, mdl, test_principal)
+        validation = self._validate(policy, mdl, test_principal, known_roles)
         stored = self._repository.create_policy(
             project_id,
             policy,
@@ -64,11 +66,12 @@ class PolicyService:
         mdl: Mdl,
         test_principal: Principal,
         actor_id: str,
+        known_roles: Collection[str] | None = None,
     ) -> SavedPolicy:
         existing = self._repository.get_policy(project_id, policy_id)
         if existing is None:
             raise PolicyNotFound(policy_id)
-        validation = self._validate(policy, mdl, test_principal)
+        validation = self._validate(policy, mdl, test_principal, known_roles)
         audit = _event(
             actor_id,
             "row_policy_updated",
@@ -110,10 +113,14 @@ class PolicyService:
             raise PolicyNotFound(policy_id)
 
     def _validate(
-        self, policy: RowPolicy, mdl: Mdl, test_principal: Principal
+        self,
+        policy: RowPolicy,
+        mdl: Mdl,
+        test_principal: Principal,
+        known_roles: Collection[str] | None = None,
     ) -> PolicyValidation:
         validation = validate_policy(
-            policy, mdl, test_principal, self._repository.known_attribute_keys()
+            policy, mdl, test_principal, self._repository.known_attribute_keys(), known_roles
         )
         if not validation.ok:
             raise PolicyRejected(validation)

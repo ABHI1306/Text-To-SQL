@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Text-to-SQL Platform API
-  version: 0.4.0
+  version: 0.5.0
   description: Local authentication, PostgreSQL setup, semantic deployment, role, compile-preview, row-policy and audit APIs.
 servers:
   - url: /api/v1
@@ -337,68 +337,102 @@ paths:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
     post:
-      operationId: askProjectQuestion
+      operationId: askQuestion
+      description: >
+        Runs the question through the agent graph (retrieve, generate, compile under the caller's
+        row policies, validate with a dry run, execute). Returns the logical SQL; the compiled SQL
+        is included only for accounts holding `rerun_sql`. A typed failure is HTTP 422 (503 for
+        LLM_UNAVAILABLE) with `{code, message, retryable}` in `detail`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: false
               required: [question]
               properties:
                 question:
                   type: string
-                  minLength: 1
                   maxLength: 2000
       responses:
         "200":
-          description: SQL and results returned from the connected PostgreSQL project.
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - sql
-                  - columns
-                  - rows
-                  - retrieved_models
-                  - model_version
-                  - elapsed_ms
-                  - truncated
-                  - source
-                properties:
-                  sql:
-                    type: string
-                  columns:
-                    type: array
-                    items:
-                      type: string
-                  rows:
-                    type: array
-                    items:
-                      type: array
-                      items: {}
-                  retrieved_models:
-                    type: array
-                    items:
-                      type: string
-                  model_version:
-                    type: integer
-                  elapsed_ms:
-                    type: integer
-                  truncated:
-                    type: boolean
-                  source:
-                    type: string
-                    const: postgresql
+          description: Rows for the question.
         "409":
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
-        "502":
-          $ref: "#/components/responses/Error"
         "503":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/query/stream:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: askQuestionStream
+      description: >
+        Same pipeline as `/query`, as server-sent events in this order (steps repeat on
+        correction): retrieval, sql_candidate, compilation, validation, correction, rows, then
+        done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts
+        holding `rerun_sql`. `clarification` and `suggestions` events are defined for the
+        conversation work and are not emitted yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  maxLength: 2000
+      responses:
+        "200":
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /identity/mappings:
+    get:
+      operationId: listIdentityMappings
+      responses:
+        "200":
+          description: LDAP/OIDC group-to-role mappings.
+    put:
+      operationId: replaceIdentityMappings
+      description: >
+        Replaces all mappings of one source. The first matching mapping (in the order given)
+        decides the role, and mappings are re-applied at each login, so removing someone from a
+        group removes the role at their next login. A caller cannot map a role holding
+        capabilities they lack.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, mappings]
+              properties:
+                source:
+                  type: string
+                  enum: [ldap, oidc]
+                mappings:
+                  type: array
+                  items:
+                    type: object
+                    required: [match, role]
+                    properties:
+                      match:
+                        type: string
+                        description: Group name or DN.
+                      role:
+                        type: string
+      responses:
+        "200":
+          description: Mappings replaced.
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /roles:
     get:

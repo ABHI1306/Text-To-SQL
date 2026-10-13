@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from app.api import dependencies
+from app.api.ask_routes import router as ask_router
 from app.api.governance_routes import router as governance_router
 from app.api.routes import _CAPABILITIES, router
 from app.auth.models import AuthContext
@@ -64,7 +65,7 @@ def _dependency_calls(dependant: Any) -> Iterator[Any]:
 
 def _routes() -> list[RouteInfo]:
     found: list[RouteInfo] = []
-    for route in [*router.routes, *governance_router.routes]:
+    for route in [*router.routes, *governance_router.routes, *ask_router.routes]:
         assert isinstance(route, APIRoute)
         capabilities = {
             call.required_capability
@@ -118,6 +119,7 @@ def _client(context: AuthContext) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.include_router(governance_router)
+    app.include_router(ask_router)
     app.dependency_overrides[dependencies.get_current_context] = lambda: context
     app.dependency_overrides[dependencies.get_repository] = lambda: MagicMock()
     return TestClient(app, raise_server_exceptions=False)

@@ -423,51 +423,56 @@ def test_day4_policies_and_audit_are_stored_atomically_and_browsable() -> None:
         encrypted_connection=b"x",
         owner_id=actor_id,
     )
-    policy = RowPolicy.model_validate(
-        {
-            "name": "orders_region",
-            "model": "orders",
-            "predicate": "region = {{ user.region }}",
-            "appliesTo": {"roles": ["User"], "exemptRoles": ["Auditor"]},
-        }
-    )
+    try:
+        policy = RowPolicy.model_validate(
+            {
+                "name": "orders_region",
+                "model": "orders",
+                "predicate": "region = {{ user.region }}",
+                "appliesTo": {"roles": ["User"], "exemptRoles": ["Auditor"]},
+            }
+        )
 
-    def event(action: str) -> AuditEvent:
-        return AuditEvent(actor_id, action, "row_policy", "", {"project_id": project_id})
+        def event(action: str) -> AuditEvent:
+            return AuditEvent(actor_id, action, "row_policy", "", {"project_id": project_id})
 
-    stored = governance.create_policy(
-        project_id, policy, enabled=True, actor_id=actor_id, audit=event("row_policy_created")
-    )
-    assert stored.policy == policy and stored.enabled
-    created = governance.query(AuditFilter(resource_id=stored.id), limit=10).items
-    assert [item.action for item in created] == ["row_policy_created"]
-
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        governance.create_policy(
+        stored = governance.create_policy(
             project_id, policy, enabled=True, actor_id=actor_id, audit=event("row_policy_created")
         )
-    assert len(governance.query(AuditFilter(actor_id=actor_id, action="row_policy_created"), limit=10).items) == 1
+        assert stored.policy == policy and stored.enabled
+        created = governance.query(AuditFilter(resource_id=stored.id), limit=10).items
+        assert [item.action for item in created] == ["row_policy_created"]
 
-    changed = policy.model_copy(update={"predicate": "region <> {{ user.region }}"})
-    updated = governance.update_policy(
-        project_id, stored.id, changed, enabled=False, actor_id=actor_id,
-        audit=AuditEvent(actor_id, "row_policy_updated", "row_policy", stored.id, {}),
-    )
-    assert updated is not None and not updated.enabled
-    assert governance.list_policies(project_id, enabled_only=True) == []
-    assert len(governance.list_policies(project_id)) == 1
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            governance.create_policy(
+                project_id, policy, enabled=True, actor_id=actor_id, audit=event("row_policy_created")
+            )
+        assert len(governance.query(AuditFilter(actor_id=actor_id, action="row_policy_created"), limit=10).items) == 1
 
-    assert governance.delete_policy(
-        project_id, stored.id,
-        audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
-    )
-    assert not governance.delete_policy(
-        project_id, stored.id,
-        audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
-    )
-    first = governance.query(AuditFilter(resource_id=stored.id), limit=2)
-    assert [item.action for item in first.items] == ["row_policy_deleted", "row_policy_updated"]
-    assert first.next_cursor is not None
-    rest = governance.query(AuditFilter(resource_id=stored.id), limit=2, before_id=first.next_cursor)
-    assert [item.action for item in rest.items] == ["row_policy_created"]
-    assert rest.next_cursor is None
+        changed = policy.model_copy(update={"predicate": "region <> {{ user.region }}"})
+        updated = governance.update_policy(
+            project_id, stored.id, changed, enabled=False, actor_id=actor_id,
+            audit=AuditEvent(actor_id, "row_policy_updated", "row_policy", stored.id, {}),
+        )
+        assert updated is not None and not updated.enabled
+        assert governance.list_policies(project_id, enabled_only=True) == []
+        assert len(governance.list_policies(project_id)) == 1
+
+        assert governance.delete_policy(
+            project_id, stored.id,
+            audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
+        )
+        assert not governance.delete_policy(
+            project_id, stored.id,
+            audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
+        )
+        first = governance.query(AuditFilter(resource_id=stored.id), limit=2)
+        assert [item.action for item in first.items] == ["row_policy_deleted", "row_policy_updated"]
+        assert first.next_cursor is not None
+        rest = governance.query(AuditFilter(resource_id=stored.id), limit=2, before_id=first.next_cursor)
+        assert [item.action for item in rest.items] == ["row_policy_created"]
+        assert rest.next_cursor is None
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as connection:
+            connection.execute("DELETE FROM projects WHERE id = %s::uuid", (project_id,))
+            connection.execute("DELETE FROM users WHERE id = %s::uuid", (actor_id,))

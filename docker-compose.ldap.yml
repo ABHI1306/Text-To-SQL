@@ -1,0 +1,19 @@
+# Enables LDAP login in the api against the identity-demo OpenLDAP container:
+#   sh scripts/ldap/make-certs.sh
+#   docker compose -f docker-compose.yml -f docker-compose.ldap.yml --profile identity-demo up -d
+services:
+  api:
+    environment:
+      LDAP_URI: ldap://ldap.example.org
+      LDAP_START_TLS: "true"
+      LDAP_CA_CERT_FILE: /etc/text2sql/ldap/ca.crt
+      LDAP_SERVICE_DN: cn=svc-text2sql,dc=example,dc=org
+      LDAP_SERVICE_PASSWORD: ${LDAP_SERVICE_PASSWORD:?Set LDAP_SERVICE_PASSWORD in .env}
+      LDAP_USER_BASE_DN: ou=people,dc=example,dc=org
+      LDAP_GROUP_BASE_DN: ou=groups,dc=example,dc=org
+      LDAP_ATTRIBUTE_MAP: l=region,departmentNumber=department
+    volumes:
+      - ./scripts/ldap/certs/ca.crt:/etc/text2sql/ldap/ca.crt:ro
+    depends_on:
+      openldap:
+        condition: service_started

@@ -32,6 +32,7 @@ def validate_policy(
     mdl: Mdl,
     test_principal: Principal,
     known_attributes: Collection[str],
+    known_roles: Collection[str] | None = None,
 ) -> PolicyValidation:
     """The predicate must parse, use only the model's columns and known attributes, and compile.
 
@@ -61,6 +62,26 @@ def validate_policy(
                 for name in unknown
             )
         )
+    if known_roles is not None:
+        known = {name.casefold() for name in known_roles}
+        unknown_roles = [
+            name
+            for name in [*policy.applies_to.roles, *policy.applies_to.exempt_roles]
+            if name.casefold() not in known
+        ]
+        if unknown_roles:
+            return _failed(
+                *(
+                    CompileError(
+                        CompileErrorCode.POLICY_ERROR,
+                        f"unknown role {name!r}: a policy scoped to a role that does not exist "
+                        "would silently not apply to anyone",
+                        identifier=name,
+                        suggestions=tuple(sorted(known_roles)[:5]),
+                    )
+                    for name in unknown_roles
+                )
+            )
     forced = policy.model_copy(update={"applies_to": PolicyScope()})
     compilation = compile_query(f"SELECT * FROM {policy.model}", mdl, test_principal, [forced])
     if not compilation.ok:

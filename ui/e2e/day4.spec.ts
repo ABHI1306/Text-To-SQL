@@ -262,3 +262,142 @@ test('profile menu offers change password and sign out', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'Sign out' }).click()
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
 })
+
+function sse(events: [string, Record<string, unknown>][]): string {
+  return events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('')
+}
+
+async function openHome(page: Page, body: string, status = 200) {
+  await page.route('**/api/v1/projects/*/query/stream', (route) => route.fulfill({
+    status,
+    headers: { 'content-type': 'text/event-stream' },
+    body,
+  }))
+  await page.goto('/')
+  await page.getByLabel('Ask a question about your data').fill('How many orders per status?')
+  await page.getByRole('button', { name: 'Send' }).click()
+}
+
+const SUCCESS = sse([
+  ['retrieval', { models: ['orders'], pairs: [], instructions: [], ms: 700 }],
+  ['sql_candidate', { logical_sql: 'SELECT status, COUNT(*) AS n FROM orders GROUP BY status', attempt: 1, ms: 9000 }],
+  ['compilation', { ok: true, errors: [], ms: 5 }],
+  ['validation', { ok: true, errors: [], ms: 11 }],
+  ['rows', { columns: ['status', 'n'], rows: [['paid', 2], ['shipped', 1]], truncated: false, row_count: 2, ms: 12 }],
+  ['done', { latency_ms: 9800, attempts: 0 }],
+])
+
+test('chat streams each pipeline step into a timeline and shows the results table', async ({ page }) => {
+  await openHome(page, SUCCESS)
+  const timeline = page.getByLabel('Question execution steps')
+  await expect(timeline.getByRole('listitem').filter({ hasText: 'Retrieval' })).toContainText('700 ms')
+  await expect(timeline).toContainText('SQL candidate')
+  await expect(timeline).toContainText('Attempt 1')
+  await expect(timeline).toContainText('Validate')
+  await expect(timeline).toContainText('PostgreSQL')
+  await expect(timeline).toContainText('9728 ms in steps')
+  await expect(page.getByRole('cell', { name: 'paid' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'shipped' })).toBeVisible()
+})
+
+test('users see logical SQL only; compiled SQL appears only when the server sent it', async ({ page }) => {
+  await openHome(page, SUCCESS)
+  await page.getByRole('button', { name: 'SQL', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Logical SQL' })).toBeVisible()
+  await expect(page.locator('.sql-viewer').first()).toContainText('SELECT status, COUNT(*) AS n FROM orders')
+  await expect(page.getByRole('heading', { name: /Compiled PostgreSQL/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Copy SQL' })).toBeVisible()
+})
+
+test('accounts with rerun_sql also get the compiled SQL and can copy it', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const withCompiled = SUCCESS.replace('"errors":[],"ms":5}', '"errors":[],"sql":"WITH m_orders AS (SELECT status FROM ecommerce.orders) SELECT 1","ms":5}')
+  await openHome(page, withCompiled)
+  await page.getByRole('button', { name: 'SQL', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /Compiled PostgreSQL/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Copy compiled SQL' }).click()
+  await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('WITH m_orders AS')
+})
+
+test('results can be charted as bars or lines when they have a label and a number', async ({ page }) => {
+  await openHome(page, SUCCESS)
+  await page.getByRole('button', { name: 'Bar', exact: true }).click()
+  await expect(page.getByRole('figure', { name: 'Bar chart' }).locator('rect')).toHaveCount(2)
+  await page.getByRole('button', { name: 'Line', exact: true }).click()
+  await expect(page.getByRole('figure', { name: 'Line chart' }).locator('circle')).toHaveCount(2)
+  await page.getByRole('button', { name: 'Table', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'paid' })).toBeVisible()
+})
+
+test('a result with no numeric column cannot be charted', async ({ page }) => {
+  const names = sse([
+    ['retrieval', { models: ['customers'], ms: 1 }],
+    ['sql_candidate', { logical_sql: 'SELECT first_name FROM customers', attempt: 1, ms: 1 }],
+    ['rows', { columns: ['first_name', 'city'], rows: [['Asha', 'Pune']], truncated: false, row_count: 1, ms: 1 }],
+    ['done', { latency_ms: 3 }],
+  ])
+  await openHome(page, names)
+  await expect(page.getByRole('button', { name: 'Bar', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Line', exact: true })).toBeDisabled()
+})
+
+test('a typed failure shows the E_ code, the failed step and offers retry only when retryable', async ({ page }) => {
+  const failed = sse([
+    ['retrieval', { models: ['orders'], ms: 1 }],
+    ['sql_candidate', { logical_sql: 'SELECT x FROM orders', attempt: 1, ms: 1 }],
+    ['compilation', { ok: false, errors: [{ code: 'UNKNOWN_COLUMN', message: "Column 'x' could not be resolved" }], ms: 3 }],
+    ['correction', { attempt: 1, reason: "Column 'x' could not be resolved", ms: 0 }],
+    ['error', { code: 'UNKNOWN_COLUMN', message: "Column 'x' could not be resolved", retryable: false }],
+  ])
+  await openHome(page, failed)
+  const alert = page.getByRole('alert').filter({ hasText: 'E_UNKNOWN_COLUMN' })
+  await expect(alert).toContainText("Column 'x' could not be resolved")
+  await expect(alert.getByRole('button', { name: 'Try again' })).toHaveCount(0)
+  const timeline = page.getByLabel('Question execution steps')
+  await expect(timeline.locator('.trace-step.failed')).toHaveCount(2)
+  await expect(timeline).toContainText('Stopped')
+})
+
+test('a retryable failure offers Try again', async ({ page }) => {
+  await openHome(page, sse([['error', { code: 'TIMEOUT', message: 'The query took too long and was stopped.', retryable: true }]]))
+  await expect(page.getByRole('alert').filter({ hasText: 'E_TIMEOUT' }).getByRole('button', { name: 'Try again' })).toBeVisible()
+})
+
+test('a clarification is answered with quick replies that re-ask', async ({ page }) => {
+  let asked = 0
+  await page.route('**/api/v1/projects/*/query/stream', (route) => {
+    asked += 1
+    const question = (route.request().postDataJSON() as { question: string }).question
+    const body = question === 'Active customers'
+      ? SUCCESS
+      : sse([['clarification', { question: 'Which customers do you mean?', options: ['All customers', 'Active customers'] }]])
+    return route.fulfill({ headers: { 'content-type': 'text/event-stream' }, body })
+  })
+  await page.goto('/')
+  await page.getByLabel('Ask a question about your data').fill('Show customers')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const clarification = page.getByRole('region', { name: 'Clarifying question' })
+  await expect(clarification).toContainText('Which customers do you mean?')
+  await clarification.getByRole('button', { name: 'Active customers' }).click()
+  await expect(page.getByRole('cell', { name: 'paid' })).toBeVisible()
+  expect(asked).toBe(2)
+})
+
+test('follow-up suggestions from the server become chips', async ({ page }) => {
+  await openHome(page, SUCCESS.replace('event: done', 'event: suggestions\ndata: {"items":["Break it down by month"]}\n\nevent: done'))
+  await expect(page.getByLabel('Follow-up suggestions').getByRole('button', { name: 'Break it down by month' })).toBeVisible()
+})
+
+test('Re-run asks the same question again', async ({ page }) => {
+  let asked = 0
+  await page.route('**/api/v1/projects/*/query/stream', (route) => {
+    asked += 1
+    return route.fulfill({ headers: { 'content-type': 'text/event-stream' }, body: SUCCESS })
+  })
+  await page.goto('/')
+  await page.getByLabel('Ask a question about your data').fill('How many orders per status?')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByRole('button', { name: 'Re-run' }).click()
+  await expect.poll(() => asked).toBe(2)
+})

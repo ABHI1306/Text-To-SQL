@@ -10,3 +10,7 @@ class WarehousePort(Protocol):
         *,
         max_rows: int,
     ) -> QueryResult: ...
+
+    def explain(self, query: ValidatedQuery) -> None:
+        """Dry run: plan the query without executing it. Raises when PostgreSQL rejects it."""
+        ...

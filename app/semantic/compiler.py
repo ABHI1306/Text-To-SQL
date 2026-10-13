@@ -29,6 +29,7 @@ DEFAULT_LIMIT = 1000
 MODEL_CTE_PREFIX = "m_"
 METRIC_CTE_PREFIX = "metric_"
 MAX_CALCULATION_DEPTH = 10
+MAX_SQL_CHARS = 20_000
 
 DISALLOWED_FUNCTION_PREFIXES = ("pg_", "lo_", "dblink", "txid_", "xmlbinary")
 DISALLOWED_FUNCTIONS = frozenset(
@@ -66,6 +67,7 @@ class CompileErrorCode(StrEnum):
     JOIN_NOT_ALLOWED = "JOIN_NOT_ALLOWED"
     INVALID_MODEL = "INVALID_MODEL"
     POLICY_ERROR = "POLICY_ERROR"
+    DRY_RUN_FAILED = "DRY_RUN_FAILED"
 
 
 @dataclass(frozen=True)
@@ -106,10 +108,20 @@ def compile_query(
     default_limit: int = DEFAULT_LIMIT,
 ) -> CompiledQuery:
     """Compile logical SQL. ``principal=None`` applies no row policies (structural checks only)."""
+    if len(logical_sql) > MAX_SQL_CHARS:
+        return CompiledQuery(
+            sql="",
+            errors=(CompileError(CompileErrorCode.SYNTAX_ERROR, "the query is too long"),),
+        )
     try:
         return _Compilation(mdl, principal, policies, default_limit).run(logical_sql)
     except _Failure as failure:
         return CompiledQuery(sql="", errors=failure.errors)
+    except RecursionError:
+        return CompiledQuery(
+            sql="",
+            errors=(CompileError(CompileErrorCode.SYNTAX_ERROR, "the query is nested too deeply"),),
+        )
 
 
 class _Compilation:
@@ -140,7 +152,7 @@ class _Compilation:
         cte_names = self._collect_cte_names(root)
         self._resolve_relations(root, cte_names)
         self._expand_metrics(root, cte_names)
-        self._check_joins(root, cte_names)
+        self._check_joins(root)
         used_columns = self._used_columns(root, cte_names)
         used_models = self._rewrite_model_references(root, cte_names)
         model_ctes = [
@@ -182,43 +194,15 @@ class _Compilation:
             raise _Failure(
                 CompileError(CompileErrorCode.NON_SELECT, "only SELECT statements are allowed")
             )
+        if isinstance(root, exp.Select) and not root.expressions:
+            raise _Failure(CompileError(CompileErrorCode.SYNTAX_ERROR, "SELECT needs a column list"))
         self._reject_forbidden_nodes(root)
         return root
 
     def _reject_forbidden_nodes(self, root: exp.Expr) -> None:
-        for node in root.walk():
-            if isinstance(node, (exp.DML, exp.DDL, exp.Command, exp.Into, exp.Lock)):
-                raise _Failure(
-                    CompileError(
-                        CompileErrorCode.NON_SELECT, "only read-only SELECT statements are allowed"
-                    )
-                )
-            if isinstance(node, (exp.Placeholder, exp.Parameter)):
-                raise _Failure(
-                    CompileError(
-                        CompileErrorCode.SYNTAX_ERROR, "query parameters are not allowed"
-                    )
-                )
-            if isinstance(node, exp.Table) and not isinstance(node.this, exp.Identifier):
-                raise _Failure(
-                    CompileError(
-                        CompileErrorCode.DISALLOWED_FUNCTION,
-                        "table-valued functions are not allowed",
-                        identifier=node.this.sql(DIALECT) if node.this else None,
-                    )
-                )
-            if isinstance(node, (exp.Func, exp.CurrentUser, exp.CurrentSchema)):
-                name = _function_name(node)
-                if name.replace("_", "") in DISALLOWED_FUNCTIONS or name.startswith(
-                    DISALLOWED_FUNCTION_PREFIXES
-                ):
-                    raise _Failure(
-                        CompileError(
-                            CompileErrorCode.DISALLOWED_FUNCTION,
-                            f"function {name!r} is not allowed",
-                            identifier=name,
-                        )
-                    )
+        problem = find_forbidden_construct(root, allow_parameters=False)
+        if problem is not None:
+            raise _Failure(problem)
 
     # -------------------------------------------------------------- 2. resolve relations
 
@@ -245,9 +229,10 @@ class _Compilation:
     def _resolve_relations(self, root: exp.Expr, cte_names: set[str]) -> None:
         allowed = [*self.models, *self.metrics]
         errors: list[CompileError] = []
+        cte_refs = cte_reference_ids(root)
         for table in root.find_all(exp.Table):
             name = _table_name(table)
-            if not table.db and not table.catalog and name in cte_names:
+            if not table.db and not table.catalog and id(table) in cte_refs:
                 continue
             if table.db or table.catalog or name not in allowed:
                 shown = ".".join(part for part in (table.catalog, table.db, table.name) if part)
@@ -271,9 +256,10 @@ class _Compilation:
         row policies below apply to them like any other query text.
         """
         used: dict[str, Metric] = {}
+        cte_refs = cte_reference_ids(root)
         for table in list(root.find_all(exp.Table)):
             name = _table_name(table)
-            if table.db or name in cte_names or name not in self.metrics:
+            if table.db or id(table) in cte_refs or name not in self.metrics:
                 continue
             used[name] = self.metrics[name]
             table.replace(
@@ -368,7 +354,8 @@ class _Compilation:
 
     # -------------------------------------------------------------------- 5. joins
 
-    def _check_joins(self, root: exp.Expr, cte_names: set[str]) -> None:
+    def _check_joins(self, root: exp.Expr) -> None:
+        cte_refs = cte_reference_ids(root)
         for scope in traverse_scope(root):
             select = scope.expression
             if not isinstance(select, exp.Select) or not select.args.get("joins"):
@@ -376,20 +363,20 @@ class _Compilation:
             first = select.args.get("from_")
             sources: list[exp.Expr] = [first.this] if first is not None else []
             for join in select.args["joins"]:
-                self._check_join(scope, join, list(sources), cte_names)
+                self._check_join(scope, join, list(sources), cte_refs)
                 sources.append(join.this)
 
     def _check_join(
-        self, scope: Scope, join: exp.Join, left: list[exp.Expr], cte_names: set[str]
+        self, scope: Scope, join: exp.Join, left: list[exp.Expr], cte_refs: set[int]
     ) -> None:
         right = join.this
-        right_model = self._model_of(right, cte_names)
+        right_model = self._model_of(right, cte_refs)
         if right_model is None:
             return
         left_models = [
             (source.alias_or_name, model)
             for source in left
-            if (model := self._model_of(source, cte_names)) is not None
+            if (model := self._model_of(source, cte_refs)) is not None
         ]
         if not left_models:
             return
@@ -432,7 +419,7 @@ class _Compilation:
                 ),
             )
             return
-        provided = self._join_pairs(scope, join, left_models, right_model, cte_names)
+        provided = self._join_pairs(scope, join, left_models, right_model, cte_refs)
         for alias, relationship in matches:
             required = _condition_pairs(relationship.condition)
             if required <= provided:
@@ -452,7 +439,7 @@ class _Compilation:
         join: exp.Join,
         left_models: list[tuple[str, str]],
         right_model: str,
-        cte_names: set[str],
+        cte_refs: set[int],
     ) -> set[frozenset[tuple[str, str]]]:
         alias_models = dict(left_models)
         alias_models[join.this.alias_or_name] = right_model
@@ -487,10 +474,10 @@ class _Compilation:
         ]
         return (owners[0], side.name.lower()) if len(owners) == 1 else None
 
-    def _model_of(self, source: exp.Expr, cte_names: set[str]) -> str | None:
-        if isinstance(source, exp.Table) and not source.db:
+    def _model_of(self, source: exp.Expr, cte_refs: set[int]) -> str | None:
+        if isinstance(source, exp.Table) and not source.db and id(source) not in cte_refs:
             name = _table_name(source)
-            if name in self.models and name not in cte_names:
+            if name in self.models:
                 return name
         return None
 
@@ -511,9 +498,10 @@ class _Compilation:
 
     def _rewrite_model_references(self, root: exp.Expr, cte_names: set[str]) -> list[str]:
         used: dict[str, None] = {}
+        cte_refs = cte_reference_ids(root)
         for table in list(root.find_all(exp.Table)):
             name = _table_name(table)
-            if table.db or name in cte_names or name not in self.models:
+            if table.db or id(table) in cte_refs or name not in self.models:
                 continue
             used[name] = None
             alias = table.alias or table.name
@@ -668,6 +656,15 @@ class _Compilation:
                     identifier=policy.name,
                 )
             ) from failure
+        forbidden = find_forbidden_construct(parsed, allow_parameters=True)
+        if forbidden is not None:
+            raise _Failure(
+                CompileError(
+                    CompileErrorCode.POLICY_ERROR,
+                    f"policy {policy.name!r}: {forbidden.message}",
+                    identifier=policy.name,
+                )
+            )
         if any(isinstance(node, (exp.Query, exp.Subquery)) for node in parsed.walk()):
             raise _Failure(
                 CompileError(
@@ -724,8 +721,9 @@ class _Compilation:
     def _emit(self, root: exp.Expr) -> str:
         sql = root.sql(DIALECT)
         sql = sql.replace("%", "%%")
-        for token, placeholder in self.tokens.items():
-            sql = sql.replace(token, placeholder)
+        # Longest first: one attribute's token can be a prefix of another's (a vs a__b).
+        for token in sorted(self.tokens, key=len, reverse=True):
+            sql = sql.replace(token, self.tokens[token])
         return sql
 
     def _policy_context(self) -> str:
@@ -738,6 +736,87 @@ class _Compilation:
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+def cte_reference_ids(root: exp.Expr) -> set[int]:
+    """Table nodes that resolve to a WITH name under SQL scoping rules (by node identity).
+
+    A CTE is visible only to later siblings and the statement that owns the WITH, never to its own
+    body (unless RECURSIVE) or to an enclosing query, so a same-named physical relation elsewhere
+    is not a CTE reference. Tables the scope walk never reaches are treated as physical.
+    """
+    references: set[int] = set()
+    for scope in traverse_scope(root):
+        for table in scope.tables:
+            if isinstance(scope.sources.get(table.alias_or_name), Scope):
+                references.add(id(table))
+    return references
+
+
+# Functions that sqlglot does not model as typed nodes must be listed here to be used.
+ALLOWED_UNTYPED_FUNCTIONS = frozenset(
+    {
+        "any", "abs", "ceil", "ceiling", "floor", "round", "trunc", "mod", "power", "sqrt", "exp",
+        "ln", "log", "sign", "width_bucket", "lower", "upper", "length", "char_length", "btrim",
+        "ltrim", "rtrim", "trim", "lpad", "rpad", "substr", "substring", "replace", "concat",
+        "concat_ws", "left", "right", "split_part", "strpos", "position", "initcap", "reverse",
+        "translate", "date_trunc", "date_part", "extract", "now", "age", "to_char", "to_date",
+        "to_timestamp", "make_date", "date_bin", "count", "sum", "avg", "min", "max", "array_agg",
+        "string_agg", "bool_and", "bool_or", "stddev", "stddev_samp", "stddev_pop", "variance",
+        "var_samp", "var_pop", "percentile_cont", "percentile_disc", "mode", "corr", "row_number",
+        "rank", "dense_rank", "ntile", "lag", "lead", "first_value", "last_value", "nth_value",
+        "cume_dist", "percent_rank", "coalesce", "nullif", "greatest", "least", "array_length",
+        "cardinality", "date", "timezone",
+    }
+)
+BLOCKED_CAST_TYPES = frozenset(
+    {"regclass", "regproc", "regprocedure", "regoper", "regoperator", "regtype", "regnamespace",
+     "regrole", "regconfig", "regdictionary", "oid"}
+)
+
+
+def find_forbidden_construct(root: exp.Expr, *, allow_parameters: bool) -> CompileError | None:
+    """First write, DDL, parameter, table-function or blocked-function node in ``root``."""
+    for node in root.walk():
+        if isinstance(node, (exp.DML, exp.DDL, exp.Command, exp.Into, exp.Lock)):
+            return CompileError(
+                CompileErrorCode.NON_SELECT, "only read-only SELECT statements are allowed"
+            )
+        if not allow_parameters and isinstance(node, (exp.Placeholder, exp.Parameter)):
+            return CompileError(CompileErrorCode.SYNTAX_ERROR, "query parameters are not allowed")
+        if isinstance(node, exp.Table) and not isinstance(node.this, exp.Identifier):
+            return CompileError(
+                CompileErrorCode.DISALLOWED_FUNCTION,
+                "table-valued functions are not allowed",
+                identifier=node.this.sql(DIALECT) if node.this else None,
+            )
+        if isinstance(node, (exp.GenerateSeries, exp.ExplodingGenerateSeries)):
+            return CompileError(
+                CompileErrorCode.DISALLOWED_FUNCTION,
+                "generate_series is not allowed",
+                identifier="generate_series",
+            )
+        if isinstance(node, exp.DataType) and str(node.this).lower().split(".")[-1] in BLOCKED_CAST_TYPES:
+            return CompileError(
+                CompileErrorCode.DISALLOWED_FUNCTION,
+                f"casts to {str(node.this).lower()} are not allowed",
+                identifier=str(node.this).lower(),
+            )
+        if isinstance(node, (exp.Func, exp.CurrentUser, exp.CurrentSchema, exp.CurrentCatalog)):
+            name = _function_name(node)
+            untyped_unlisted = isinstance(node, exp.Anonymous) and name not in ALLOWED_UNTYPED_FUNCTIONS
+            if (
+                untyped_unlisted
+                or name.replace("_", "") in DISALLOWED_FUNCTIONS
+                or name.startswith(DISALLOWED_FUNCTION_PREFIXES)
+                or isinstance(node, exp.CurrentCatalog)
+            ):
+                return CompileError(
+                    CompileErrorCode.DISALLOWED_FUNCTION,
+                    f"function {name!r} is not allowed",
+                    identifier=name,
+                )
+    return None
 
 
 def _syntax_message(error: SqlglotError) -> str:
