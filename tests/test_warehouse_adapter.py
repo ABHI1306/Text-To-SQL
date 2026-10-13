@@ -109,3 +109,4 @@ def test_catalog_adapter_uses_a_private_temporary_ca_file(monkeypatch) -> None:
         assert created_paths[0].exists()
 
     assert not created_paths[0].exists()
+

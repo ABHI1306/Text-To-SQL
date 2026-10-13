@@ -398,6 +398,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/compile-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Compile logical SQL against the latest saved semantic model, or against an unsaved draft passed in `mdl`. Compile failures are returned inline with `ok: false`. With `previewAsUserId` the enabled row policies apply for that user; the preview is labeled and audited as `preview_as_user`. `sample` runs the compiled SQL read-only and returns at most 10 rows. */
+        post: operations["compilePreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/deploy-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Description coverage, models needing review and compiler checks (calculated fields, metrics, relationships) of a saved revision. `deployable` is false when a check fails. */
+        get: operations["getDeployReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/row-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listRowPolicies"];
+        put?: never;
+        /** @description Saving compiles the predicate for `testUserId` and rejects it when it does not parse, uses columns outside the model or unknown attributes. Writes a `row_policy_created` audit event in the same transaction. */
+        post: operations["createRowPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/row-policies/{policy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateRowPolicy"];
+        post?: never;
+        delete: operations["deleteRowPolicy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Newest first. Pass the previous `nextCursor` as `cursor` for the next page. */
+        get: operations["browseAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/threads": {
         parameters: {
             query?: never;
@@ -438,6 +531,60 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        CompileError: {
+            /** @enum {string} */
+            code: "NON_SELECT" | "SYNTAX_ERROR" | "UNKNOWN_MODEL" | "UNKNOWN_COLUMN" | "DISALLOWED_FUNCTION" | "JOIN_NOT_ALLOWED" | "INVALID_MODEL" | "POLICY_ERROR";
+            message: string;
+            identifier?: string | null;
+            suggestions?: string[];
+        };
+        CompilePreview: {
+            ok: boolean;
+            sql: string;
+            parameters: Record<string, never>;
+            policyContext?: string;
+            appliedPolicies?: string[];
+            missingAttributes?: string[];
+            physicalRelations?: string[];
+            errors: components["schemas"]["CompileError"][];
+            preview: {
+                asUserId?: string | null;
+                labeled?: boolean;
+            };
+            sample?: {
+                columns?: string[];
+                rows?: unknown[][];
+                truncated?: boolean;
+                error?: string;
+            };
+        };
+        RowPolicyRequest: {
+            name: string;
+            model: string;
+            /** @description Boolean SQL over the model's columns; {{ user.<attribute> }} becomes a bound parameter. */
+            predicate: string;
+            appliesTo?: {
+                roles?: string[];
+                exemptRoles?: string[];
+            };
+            /** @default true */
+            enabled: boolean;
+            /** Format: uuid */
+            testUserId: string;
+        };
+        AuditPage: {
+            items: {
+                id?: number;
+                actorId?: string | null;
+                action?: string;
+                resourceType?: string;
+                resourceId?: string;
+                details?: Record<string, never>;
+                /** Format: date-time */
+                createdAt?: string;
+            }[];
+            nextCursor: number | null;
+        };
         LoginRequest: {
             username: string;
             /** Format: password */
@@ -1344,6 +1491,191 @@ export interface operations {
                 content?: never;
             };
             503: components["responses"]["Error"];
+        };
+    };
+    compilePreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    logicalSql: string;
+                    /** @description Unsaved draft MDL, for the canvas and metrics live check. */
+                    mdl?: Record<string, never>;
+                    /** Format: uuid */
+                    previewAsUserId?: string;
+                    /** @default false */
+                    sample?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Compiled query or typed compile errors. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompilePreview"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getDeployReport: {
+        parameters: {
+            query?: {
+                revision?: number;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deploy report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    listRowPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Row policies of the project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createRowPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RowPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Policy stored, with validation warnings and the test compilation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    updateRowPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RowPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Policy updated; the audit event records the previous predicate. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    deleteRowPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Policy deleted and audited. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    browseAudit: {
+        parameters: {
+            query?: {
+                actor_id?: string;
+                action?: string;
+                resource_type?: string;
+                resource_id?: string;
+                since?: string;
+                until?: string;
+                limit?: number;
+                cursor?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of audit events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            422: components["responses"]["Error"];
         };
     };
     createThread: {

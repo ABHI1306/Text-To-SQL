@@ -1,4 +1,4 @@
-"""Consistency checks for the compile test set (v0, drafted before the compiler exists)."""
+"""Consistency checks for the compile test set (v1)."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def models() -> dict[str, set[str]]:
 
 
 def test_file_is_marked_as_draft_awaiting_human_review(doc: dict[str, Any]) -> None:
-    assert doc["version"] == "v0"
+    assert doc["version"] == "v1"
     assert doc["status"] == "draft_pending_human_review"
 
 
@@ -81,7 +81,7 @@ def test_overlay_references_known_models(
         assert metric["base_model"] in models
     for policy in overlay["row_policies"]:
         assert policy["model"] in models
-        assert "{{ user." in policy["predicate"]
+        assert policy["predicate"].strip()
     for name in {c["user"] for c in doc["cases"] if c["user"]}:
         assert name in overlay["users"]
 
@@ -111,7 +111,8 @@ def test_ok_cases_use_only_models_and_known_columns(
         if case["expect"]["status"] != "ok":
             continue
         (statement,) = _statements(case["logical_sql"])
-        tables = {t.name for t in statement.find_all(exp.Table)}
+        ctes = {c.alias for c in statement.find_all(exp.CTE)}
+        tables = {t.name for t in statement.find_all(exp.Table)} - ctes
         assert tables, case["id"]
         assert tables <= set(models) | set(metrics), (case["id"], tables)
         allowed: set[str] = set()
@@ -122,7 +123,7 @@ def test_ok_cases_use_only_models_and_known_columns(
                 allowed |= {m["name"] for m in metric["measures"]}
             else:
                 allowed |= models[table] | calc.get(table, set())
-        aliases = {a.alias for a in statement.find_all(exp.Alias)}
+        aliases = {a.alias for a in statement.find_all(exp.Alias)} | ctes
         for column in statement.find_all(exp.Column):
             assert column.name in allowed | aliases, (case["id"], column.name)
 
@@ -145,7 +146,11 @@ def test_reject_cases_would_actually_be_rejected_for_the_stated_reason(
             continue
         statements = _statements(case["logical_sql"])
         if expect["error_code"] == "NON_SELECT":
-            assert len(statements) > 1 or not isinstance(statements[0], exp.Select)
+            assert (
+                len(statements) > 1
+                or not isinstance(statements[0], exp.Select)
+                or statements[0].args.get("into") is not None
+            )
         elif expect["error_code"] == "UNKNOWN_MODEL":
             tables = {
                 (t.db + "." if t.db else "") + t.name

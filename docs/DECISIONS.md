@@ -95,3 +95,68 @@ the administration capabilities `manage_users`, `manage_roles`, `view_audit`, `r
   provisional number meanwhile).
 - Compile test set v1 (40 cases) is Day 4; `tests/data/compile_cases.json` is a v0 draft of
   30 cases awaiting review.
+
+## Day 4: semantic compiler, audit and row policies
+
+- **Compiler location and shape.** `app/semantic/compiler.py` (the repo has no `application/`
+  package). `compile_query(logical_sql, mdl, principal, policies)` is pure and returns a
+  `CompiledQuery` (SQL, bound parameters, `policy_context` hash, applied policies, missing
+  attributes, typed errors). Parameters use psycopg pyformat (`%(p_region)s`); literal `%` in
+  the emitted SQL is doubled, so the query must always be executed with a parameter mapping.
+  `PostgresWarehouseAdapter` now un-doubles `%%` before its own SELECT-only parse.
+- **`principal=None` applies no policies.** It exists for structural checks (canvas live
+  compile, the plan's "compile for a test user" without a user). Every question path must pass
+  the asker's principal; the Day 5 graph must not call the compiler without one.
+- **Metrics** expand into a CTE over the base model written as logical SQL, so the base
+  model's row policies apply to them like any other use. The v0 test overlay's cross-model
+  dimension (`via: orders`) cannot be expressed by the MDL (metric expressions may only use the
+  base model's columns), so `monthly_revenue` in the v1 set is defined over `payments`.
+- **Hardening found while testing.** Data-modifying CTEs (`WITH d AS (DELETE ... RETURNING *)`)
+  first compiled as a SELECT; every DML/DDL/command node anywhere in the tree is now rejected.
+  Also rejected: table-valued functions (`generate_series`, ...), `pg_*`/`lo_*`/`dblink*` and a
+  small denylist of session/privilege functions, `SELECT INTO`, row locks, query parameters,
+  and `WITH` names that shadow a model or metric. This is a denylist plus the "relations must
+  be deployed models" rule; it is not a proof that no other function leaks information.
+- **Joins** must match a declared relationship in either direction and contain its equality
+  condition; a missing `ON` on a declared relationship is filled in; `CROSS JOIN` between two
+  models is rejected.
+- **Row policies.** Stored in `row_policies` (migration `0004_day4`), not in the MDL. Missing or
+  null attribute: predicate becomes `FALSE` and the result lists `missing_attributes` for the
+  caller to audit (the compiler cannot write). List attributes render `= ANY(%(p)s)` (also for a
+  single-placeholder `IN`). Predicates may not contain subqueries. A role listed in
+  `exemptRoles` is exempt; nobody is exempt by default, DBA included.
+- **Save-time validation** compiles `SELECT * FROM <model>` for the chosen test user with the
+  policy forced to apply (so a role scope cannot hide a broken predicate). Attributes must
+  already exist on at least one account; a test user lacking an attribute is a warning.
+- **Audit.** `audit_events` stays insert/select-only for the app role. Policy writes insert
+  their audit row in the same transaction. Other route-level events (project, MDL save, role,
+  access and attribute changes, preview-as-user) are written after the action succeeds, so a
+  failed audit insert returns 500 after the change was made; they are not atomic.
+  `GET /audit` pages newest-first with a cursor. Existing `audit_events` columns are unchanged
+  apart from a nullable `ip` that nothing fills yet.
+- **Compile test set v1** (`tests/data/compile_cases.json`, 40 cases): `expect.sql` is the
+  compiler's own output reviewed by the developer, not independently derived, and the set is
+  still `draft_pending_human_review`. Every ok case also runs on PostgreSQL in
+  `tests/test_compiler_live.py`.
+- **Not wired yet.** `QuestionService` still validates model-written physical SQL (Day 3). Routing
+  questions through the compiler, and reporting execution accuracy, is Day 5.
+
+### Still open for Day 4
+
+- Human checkpoint: define the 3 test users and attributes for the row-level security suite and
+  approve the policy predicates; DBA review of the 40 compile cases.
+- The Row policies and Audit screens remain placeholders: Day 4's UI tickets (D4-C1..C3) cover
+  the canvas, metrics and deploy report only; the policy and audit APIs are ready for them.
+
+### Day 4 UI notes
+
+- The Connect and model screen has three tabs (Canvas, Metrics, Deploy report) over one local
+  draft. Nothing is sent until **Save model**, which replaces the old "Save layout"; unsaved
+  changes disable Deploy. Live compiler checks send the draft to `compile-preview`, leaving out
+  relationships whose condition is still blank.
+- Dragging between cards infers a `MANY_TO_ONE` condition from a `<target>_id` column and the
+  target's primary key; when nothing matches the condition is blank and saving is blocked.
+- `GET /projects/{id}/deploy-report` (capability `deploy_mdl`) reports description coverage and
+  compiles every calculated field, metric and relationship. A failing compile blocks the Deploy
+  button in the UI only; `POST /deploy` itself does not yet re-check it, and the plan's
+  golden-set description gate is still not enforced.

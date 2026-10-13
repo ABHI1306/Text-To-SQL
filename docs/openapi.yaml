@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Text-to-SQL Platform API
-  version: 0.3.0
-  description: Local authentication, PostgreSQL setup, semantic deployment, and role APIs.
+  version: 0.4.0
+  description: Local authentication, PostgreSQL setup, semantic deployment, role, compile-preview, row-policy and audit APIs.
 servers:
   - url: /api/v1
 paths:
@@ -596,6 +596,145 @@ paths:
           description: Sample project and initial semantic model created.
         "503":
           $ref: "#/components/responses/Error"
+  /projects/{project_id}/compile-preview:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: compilePreview
+      description: >
+        Compile logical SQL against the latest saved semantic model, or against an unsaved
+        draft passed in `mdl`. Compile failures are returned inline with `ok: false`.
+        With `previewAsUserId` the enabled row policies apply for that user; the preview is
+        labeled and audited as `preview_as_user`. `sample` runs the compiled SQL read-only
+        and returns at most 10 rows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [logicalSql]
+              properties:
+                logicalSql:
+                  type: string
+                  maxLength: 20000
+                mdl:
+                  type: object
+                  description: Unsaved draft MDL, for the canvas and metrics live check.
+                previewAsUserId:
+                  type: string
+                  format: uuid
+                sample:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Compiled query or typed compile errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompilePreview"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/deploy-report:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getDeployReport
+      description: >
+        Description coverage, models needing review and compiler checks (calculated fields,
+        metrics, relationships) of a saved revision. `deployable` is false when a check fails.
+      parameters:
+        - { name: revision, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Deploy report.
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/row-policies:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listRowPolicies
+      responses:
+        "200":
+          description: Row policies of the project.
+    post:
+      operationId: createRowPolicy
+      description: >
+        Saving compiles the predicate for `testUserId` and rejects it when it does not parse,
+        uses columns outside the model or unknown attributes. Writes a `row_policy_created`
+        audit event in the same transaction.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RowPolicyRequest"
+      responses:
+        "201":
+          description: Policy stored, with validation warnings and the test compilation.
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/row-policies/{policy_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: policy_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateRowPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RowPolicyRequest"
+      responses:
+        "200":
+          description: Policy updated; the audit event records the previous predicate.
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRowPolicy
+      responses:
+        "204":
+          description: Policy deleted and audited.
+        "404":
+          $ref: "#/components/responses/Error"
+  /audit:
+    get:
+      operationId: browseAudit
+      description: Newest first. Pass the previous `nextCursor` as `cursor` for the next page.
+      parameters:
+        - { name: actor_id, in: query, schema: { type: string, format: uuid } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: resource_type, in: query, schema: { type: string } }
+        - { name: resource_id, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: A page of audit events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditPage"
+        "422":
+          $ref: "#/components/responses/Error"
   /threads:
     post:
       operationId: createThread
@@ -661,6 +800,126 @@ components:
         type: string
         format: uuid
   schemas:
+    CompileError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - NON_SELECT
+            - SYNTAX_ERROR
+            - UNKNOWN_MODEL
+            - UNKNOWN_COLUMN
+            - DISALLOWED_FUNCTION
+            - JOIN_NOT_ALLOWED
+            - INVALID_MODEL
+            - POLICY_ERROR
+        message:
+          type: string
+        identifier:
+          type: [string, "null"]
+        suggestions:
+          type: array
+          items:
+            type: string
+    CompilePreview:
+      type: object
+      required: [ok, sql, parameters, errors, preview]
+      properties:
+        ok:
+          type: boolean
+        sql:
+          type: string
+        parameters:
+          type: object
+        policyContext:
+          type: string
+        appliedPolicies:
+          type: array
+          items:
+            type: string
+        missingAttributes:
+          type: array
+          items:
+            type: string
+        physicalRelations:
+          type: array
+          items:
+            type: string
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompileError"
+        preview:
+          type: object
+          properties:
+            asUserId:
+              type: [string, "null"]
+            labeled:
+              type: boolean
+        sample:
+          type: object
+          properties:
+            columns:
+              type: array
+              items:
+                type: string
+            rows:
+              type: array
+              items:
+                type: array
+                items: {}
+            truncated:
+              type: boolean
+            error:
+              type: string
+    RowPolicyRequest:
+      type: object
+      required: [name, model, predicate, testUserId]
+      properties:
+        name:
+          type: string
+        model:
+          type: string
+        predicate:
+          type: string
+          description: "Boolean SQL over the model's columns; {{ user.<attribute> }} becomes a bound parameter."
+        appliesTo:
+          type: object
+          properties:
+            roles:
+              type: array
+              items:
+                type: string
+            exemptRoles:
+              type: array
+              items:
+                type: string
+        enabled:
+          type: boolean
+          default: true
+        testUserId:
+          type: string
+          format: uuid
+    AuditPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              actorId: { type: [string, "null"] }
+              action: { type: string }
+              resourceType: { type: string }
+              resourceId: { type: string }
+              details: { type: object }
+              createdAt: { type: string, format: date-time }
+        nextCursor:
+          type: [integer, "null"]
     LoginRequest:
       type: object
       required: [username, password]

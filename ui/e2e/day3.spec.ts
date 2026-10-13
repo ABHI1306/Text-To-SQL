@@ -11,8 +11,8 @@ const demoMdl = {
     columns: [{ name: `${name.slice(0, -1)}_id`, type: 'integer', isPrimaryKey: true }],
   })),
   relationships: [
-    { name: 'orders_customers', models: ['orders', 'customers'], joinType: 'MANY_TO_ONE' },
-    { name: 'items_orders', models: ['order_items', 'orders'], joinType: 'MANY_TO_ONE' },
+    { name: 'orders_customers', models: ['orders', 'customers'], joinType: 'MANY_TO_ONE', condition: 'orders.customer_id = customers.customer_id' },
+    { name: 'items_orders', models: ['order_items', 'orders'], joinType: 'MANY_TO_ONE', condition: 'order_items.order_id = orders.order_id' },
   ],
   metrics: [],
   instructions: [],
@@ -100,8 +100,8 @@ test('canvas renders the demo model and saves moved node positions', async ({ pa
   await page.mouse.move(box!.x + box!.width / 2 + 140, box!.y + 12 + 90, { steps: 8 })
   await page.mouse.up()
 
-  await page.getByRole('button', { name: 'Save layout' }).click()
-  await expect(page.getByRole('status').filter({ hasText: 'Model layout saved.' })).toBeVisible()
+  await page.getByRole('button', { name: 'Save model' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Model saved.' })).toBeVisible()
   expect(saved).not.toBeNull()
   const layout = saved!.layout
   expect(Object.keys(layout).sort()).toEqual(['customers', 'order_items', 'orders'])

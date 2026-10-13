@@ -1,11 +1,14 @@
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.adapters.metadata.governance import PostgresGovernanceRepository
 from app.adapters.metadata.postgres import PostgresMetadataRepository
+from app.audit.service import AuditService
 from app.auth.models import AuthContext
 from app.auth.service import (
     AuthenticationError,
@@ -101,3 +104,25 @@ def require_capability(capability: str) -> Callable[..., AuthContext]:
 
     check.required_capability = capability  # type: ignore[attr-defined]
     return check
+
+
+@lru_cache
+def get_governance_repository() -> PostgresGovernanceRepository:
+    settings = get_settings()
+    if not settings.metadata_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Metadata database is not configured",
+        )
+    return PostgresGovernanceRepository(settings.metadata_database_url)
+
+
+def get_audit_service(
+    repository: Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)],
+) -> AuditService:
+    return AuditService(repository)
+
+
+def require_project_access(context: AuthContext, project_id: UUID) -> None:
+    if str(project_id) not in context.project_ids:
+        raise HTTPException(status_code=404, detail="Project not found")

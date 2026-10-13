@@ -15,6 +15,7 @@ from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
 from app.adapters.warehouse.postgres import PostgresWarehouseAdapter
 from app.adapters.warehouse.postgres_catalog import PostgresCatalogAdapter
 from app.api.dependencies import (
+    get_audit_service,
     get_auth_service,
     get_current_context,
     get_password_change_context,
@@ -28,6 +29,7 @@ from app.api.security import (
     encrypt_connection,
     test_connection,
 )
+from app.audit.service import AuditService
 from app.auth.models import AuthContext, LoginResult
 from app.auth.service import (
     AuthenticationError,
@@ -49,6 +51,7 @@ router = APIRouter(prefix="/api/v1")
 
 AuthServiceDependency = Annotated[AuthService, Depends(get_auth_service)]
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
+AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 CurrentContext = Annotated[AuthContext, Depends(get_current_context)]
 PasswordChangeContext = Annotated[AuthContext, Depends(get_password_change_context)]
 ManageConnectionContext = Annotated[
@@ -430,6 +433,7 @@ def create_project(
     context: ManageConnectionContext,
     repository: RepositoryDependency,
     auth_service: AuthServiceDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     try:
         test_connection(body, get_settings())
@@ -450,6 +454,7 @@ def create_project(
         owner_id=context.user_id,
     )
     auth_service.invalidate_auth_context(context.user_id)
+    audit.record(context.user_id, "project_created", "project", str(project_id), {"name": body.display_name, "database": body.database})
     return {"id": str(project_id), "name": body.display_name, "setup_step": "tables"}
 
 
@@ -572,6 +577,7 @@ def save_mdl(
     body: Mdl,
     context: EditMdlContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     _require_project_access(context, project_id)
     project = repository.get_project_connection(str(project_id))
@@ -597,6 +603,7 @@ def save_mdl(
         str(project_id),
         body.model_dump(by_alias=True, mode="json"),
     )
+    audit.record(context.user_id, "mdl_saved", "project", str(project_id), {"revision": version, "models": len(body.models), "metrics": len(body.metrics)})
     return {
         "project_id": str(project_id),
         "revision": version,
@@ -715,12 +722,14 @@ def create_role(
     body: RoleRequest,
     context: ManageRolesContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     _require_delegable_capabilities(context, body.capabilities)
     try:
         role_id = repository.create_role(body.name, body.description, body.capabilities)
     except psycopg.errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Role name already exists") from error
+    audit.record(context.user_id, "role_created", "role", str(role_id), {"name": body.name, "capabilities": sorted(body.capabilities)})
     return {"id": role_id, **body.model_dump()}
 
 
@@ -730,6 +739,7 @@ def update_role(
     body: RoleRequest,
     context: ManageRolesContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     _require_delegable_capabilities(context, body.capabilities)
     try:
@@ -743,14 +753,16 @@ def update_role(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except psycopg.errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Role name already exists") from error
+    audit.record(context.user_id, "role_updated", "role", str(role_id), {"name": body.name, "capabilities": sorted(body.capabilities)})
     return {"id": str(role_id), **body.model_dump()}
 
 
 @router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_role(
     role_id: UUID,
-    _context: ManageRolesContext,
+    context: ManageRolesContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> Response:
     try:
         repository.delete_role(str(role_id))
@@ -758,6 +770,7 @@ def delete_role(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    audit.record(context.user_id, "role_deleted", "role", str(role_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -795,6 +808,7 @@ def assign_user_role(
     body: UserRoleRequest,
     context: ManageUsersContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     capabilities = repository.get_role_capabilities(body.role)
     if capabilities is None:
@@ -804,6 +818,7 @@ def assign_user_role(
         repository.set_user_role(str(user_id), body.role)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    audit.record(context.user_id, "user_role_changed", "user", str(user_id), {"role": body.role})
     return {"user_id": str(user_id), "role": body.role}
 
 
@@ -824,6 +839,7 @@ def set_user_project_access(
     body: ProjectAccessRequest,
     context: ManageUsersContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     _require_delegable_projects(context, body.project_ids)
     try:
@@ -834,6 +850,7 @@ def set_user_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    audit.record(context.user_id, "user_project_access_changed", "user", str(user_id), {"project_ids": [str(p) for p in body.project_ids]})
     return {"user_id": str(user_id), "project_ids": body.project_ids}
 
 
@@ -854,6 +871,7 @@ def set_role_project_access(
     body: ProjectAccessRequest,
     context: ManageRolesContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     _require_delegable_projects(context, body.project_ids)
     try:
@@ -864,6 +882,7 @@ def set_role_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    audit.record(context.user_id, "role_project_access_changed", "role", str(role_id), {"project_ids": [str(p) for p in body.project_ids]})
     return {"role_id": str(role_id), "project_ids": body.project_ids}
 
 
@@ -882,13 +901,15 @@ def get_user_attributes(
 def set_user_attributes(
     user_id: UUID,
     body: UserAttributesRequest,
-    _context: ManageUsersContext,
+    context: ManageUsersContext,
     repository: RepositoryDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     try:
         repository.replace_user_attributes(str(user_id), body.attributes)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    audit.record(context.user_id, "user_attributes_changed", "user", str(user_id), {"keys": sorted(body.attributes)})
     return {"user_id": str(user_id), "attributes": body.attributes}
 
 
@@ -914,6 +935,7 @@ def create_sample_project(
     context: ManageConnectionContext,
     repository: RepositoryDependency,
     auth_service: AuthServiceDependency,
+    audit: AuditDependency,
 ) -> dict[str, object]:
     template = SAMPLE_PROJECT_TEMPLATES.get(template_id)
     if template is None:
@@ -994,4 +1016,6 @@ def create_sample_project(
         project_id,
         draft.mdl.model_dump(by_alias=True, mode="json"),
     )
+    audit.record(context.user_id, "sample_project_created", "project", project_id, {"template": template_id, "revision": revision})
     return {"id": project_id, "name": template_name, "revision": revision}
+

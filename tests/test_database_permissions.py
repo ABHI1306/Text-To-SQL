@@ -9,13 +9,16 @@ from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.errors import InsufficientPrivilege, QueryCanceled
 
+from app.adapters.metadata.governance import PostgresGovernanceRepository
 from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.adapters.warehouse.postgres import PostgresWarehouseAdapter
 from app.adapters.warehouse.postgres_catalog import PostgresCatalogAdapter
-from app.api.dependencies import get_auth_service, get_repository
+from app.api.dependencies import get_auth_service, get_governance_repository, get_repository
 from app.auth.service import AuthenticationError, AuthService, PasswordChangeRequired, hash_password
-from app.core.types import ValidatedQuery
+from app.core.types import AuditEvent, ValidatedQuery
+from app.domain.policy import RowPolicy
 from app.main import app
+from app.ports.audit import AuditFilter
 from app.semantic.profiling import ProfilingService
 
 
@@ -270,7 +273,9 @@ def test_day2_authenticated_setup_api_end_to_end(monkeypatch) -> None:
         jwt_secret="integration-test-jwt-secret-with-32-bytes",
     )
     app.dependency_overrides[get_auth_service] = lambda: service
+    governance = PostgresGovernanceRepository(metadata_dsn)
     app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_governance_repository] = lambda: governance
     project_id: str | None = None
 
     class TestLLM:
@@ -377,6 +382,11 @@ def test_day2_authenticated_setup_api_end_to_end(monkeypatch) -> None:
             )
             assert saved.status_code == 200
             assert saved.json()["revision"] == 1
+            recorded = {
+                event.action
+                for event in governance.query(AuditFilter(actor_id=user_id), limit=50).items
+            }
+            assert {"project_created", "mdl_saved"} <= recorded
 
             stored = client.get(
                 f"/api/v1/projects/{project_id}/mdl",
@@ -395,3 +405,69 @@ def test_day2_authenticated_setup_api_end_to_end(monkeypatch) -> None:
             if project_id is not None:
                 metadata.execute("DELETE FROM projects WHERE id = %s::uuid", (project_id,))
             metadata.execute("DELETE FROM users WHERE id = %s::uuid", (user_id,))
+
+
+def test_day4_policies_and_audit_are_stored_atomically_and_browsable() -> None:
+    dsn = _required_dsn("METADATA_APP_DSN")
+    repository = PostgresMetadataRepository(dsn)
+    governance = PostgresGovernanceRepository(dsn)
+    actor_id = repository.bootstrap_dba(f"day4-{uuid.uuid4().hex}", hash_password("temporary-day4-password"))
+    project_id = str(uuid.uuid4())
+    repository.create_project(
+        project_id=project_id,
+        name="day4",
+        host="demo-db",
+        port=5432,
+        database_name="demo",
+        ssl_enabled=False,
+        encrypted_connection=b"x",
+        owner_id=actor_id,
+    )
+    policy = RowPolicy.model_validate(
+        {
+            "name": "orders_region",
+            "model": "orders",
+            "predicate": "region = {{ user.region }}",
+            "appliesTo": {"roles": ["User"], "exemptRoles": ["Auditor"]},
+        }
+    )
+
+    def event(action: str) -> AuditEvent:
+        return AuditEvent(actor_id, action, "row_policy", "", {"project_id": project_id})
+
+    stored = governance.create_policy(
+        project_id, policy, enabled=True, actor_id=actor_id, audit=event("row_policy_created")
+    )
+    assert stored.policy == policy and stored.enabled
+    created = governance.query(AuditFilter(resource_id=stored.id), limit=10).items
+    assert [item.action for item in created] == ["row_policy_created"]
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        governance.create_policy(
+            project_id, policy, enabled=True, actor_id=actor_id, audit=event("row_policy_created")
+        )
+    assert len(governance.query(AuditFilter(actor_id=actor_id, action="row_policy_created"), limit=10).items) == 1
+
+    changed = policy.model_copy(update={"predicate": "region <> {{ user.region }}"})
+    updated = governance.update_policy(
+        project_id, stored.id, changed, enabled=False, actor_id=actor_id,
+        audit=AuditEvent(actor_id, "row_policy_updated", "row_policy", stored.id, {}),
+    )
+    assert updated is not None and not updated.enabled
+    assert governance.list_policies(project_id, enabled_only=True) == []
+    assert len(governance.list_policies(project_id)) == 1
+
+    assert governance.delete_policy(
+        project_id, stored.id,
+        audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
+    )
+    assert not governance.delete_policy(
+        project_id, stored.id,
+        audit=AuditEvent(actor_id, "row_policy_deleted", "row_policy", stored.id, {}),
+    )
+    first = governance.query(AuditFilter(resource_id=stored.id), limit=2)
+    assert [item.action for item in first.items] == ["row_policy_deleted", "row_policy_updated"]
+    assert first.next_cursor is not None
+    rest = governance.query(AuditFilter(resource_id=stored.id), limit=2, before_id=first.next_cursor)
+    assert [item.action for item in rest.items] == ["row_policy_created"]
+    assert rest.next_cursor is None

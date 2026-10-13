@@ -76,7 +76,8 @@ class PostgresWarehouseAdapter:
     ) -> QueryResult:
         if max_rows <= 0 or max_rows > self._max_rows:
             raise ValueError(f"max_rows must be between 1 and {self._max_rows}")
-        self._ensure_read_only_select(query.sql)
+        # Query text is psycopg pyformat: a literal % is written %%, which only the driver reads.
+        self._ensure_read_only_select(query.sql.replace("%%", "%"))
 
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")

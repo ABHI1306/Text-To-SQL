@@ -1,52 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import ReactFlow, {
-  Background,
-  Controls,
-  MiniMap,
-  applyNodeChanges,
-  type Edge,
-  type Node,
-  type NodeChange,
-} from 'reactflow'
 
-import 'reactflow/dist/style.css'
+import { CanvasEditor } from './CanvasEditor'
+import { DeployReport } from './DeployReport'
+import { MetricsEditor } from './MetricsEditor'
+import { describeFailure, layoutFor, type ApiRequest, type Mdl } from './modelTypes'
 
-type ModelDefinition = {
-  name: string
-  tableReference: string
-  description: string
-  columns: { name: string }[]
+type Tab = 'Canvas' | 'Metrics' | 'Deploy report'
+const TABS: Tab[] = ['Canvas', 'Metrics', 'Deploy report']
+
+function withoutServerFields(mdl: Mdl): Omit<Mdl, 'project_id' | 'revision' | 'status'> {
+  const { project_id: _p, revision: _r, status: _s, ...rest } = mdl
+  void _p
+  void _r
+  void _s
+  return rest
 }
 
-type RelationshipDefinition = {
-  name: string
-  models: [string, string]
-  joinType: string
-}
-type Mdl = {
-  version: number
-  dialect: string
-  models: ModelDefinition[]
-  relationships: RelationshipDefinition[]
-  metrics: object[]
-  instructions: string[]
-  layout: Record<string, { x: number; y: number }>
-  project_id?: string
-  revision?: number
-  status?: string
-}
-type ApiRequest = (path: string, init?: RequestInit) => Promise<Response>
-type ModelNodeData = { label: string; table: string; description: string }
-
-function layoutFor(mdl: Mdl): Record<string, { x: number; y: number }> {
-  const layout: Record<string, { x: number; y: number }> = {}
-  mdl.models.forEach((model, index) => {
-    layout[model.name] = mdl.layout?.[model.name] ?? {
-      x: (index % 3) * 300,
-      y: Math.floor(index / 3) * 200,
-    }
-  })
-  return layout
+function normalised(document: Mdl): Mdl {
+  return { ...document, layout: layoutFor(document) }
 }
 
 export function ModelCanvas({
@@ -56,33 +27,17 @@ export function ModelCanvas({
   apiRequest: ApiRequest
   projectId: string | undefined
 }) {
-  const [mdl, setMdl] = useState<Mdl | null>(null)
-  const [nodes, setNodes] = useState<Node<ModelNodeData>[]>([])
-  const [edges, setEdges] = useState<Edge[]>([])
+  const [draft, setDraft] = useState<Mdl | null>(null)
+  const [baseline, setBaseline] = useState('')
+  const [tab, setTab] = useState<Tab>('Canvas')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const applyMdl = useCallback((document: Mdl) => {
-    const positions = layoutFor(document)
-    setMdl(document)
-    setNodes(document.models.map((model) => ({
-      id: model.name,
-      position: positions[model.name],
-      data: {
-        label: model.name,
-        table: model.tableReference,
-        description: model.description,
-      },
-      type: 'default',
-    })))
-    setEdges(document.relationships.map((relationship) => ({
-      id: relationship.name,
-      source: relationship.models[0],
-      target: relationship.models[1],
-      label: relationship.joinType.replaceAll('_', ' '),
-      animated: false,
-    })))
+  const load = useCallback((document: Mdl) => {
+    const next = normalised(document)
+    setDraft(next)
+    setBaseline(JSON.stringify(withoutServerFields(next)))
   }, [])
 
   useEffect(() => {
@@ -92,7 +47,7 @@ export function ModelCanvas({
       .then(async (response) => {
         if (!response.ok) throw new Error(`Could not load semantic model (${response.status})`)
         const document = await response.json() as Mdl
-        if (current) applyMdl(document)
+        if (current) load(document)
       })
       .catch((reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : 'Could not load model')
@@ -100,62 +55,47 @@ export function ModelCanvas({
     return () => {
       current = false
     }
-  }, [apiRequest, applyMdl, projectId])
+  }, [apiRequest, load, projectId])
 
-  const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((current) => applyNodeChanges(changes, current))
-  }, [])
-
-  const positions = useMemo(
-    () => Object.fromEntries(nodes.map((node) => [node.id, node.position])),
-    [nodes],
+  const dirty = useMemo(
+    () => draft !== null && JSON.stringify(withoutServerFields(draft)) !== baseline,
+    [draft, baseline],
   )
+  const incomplete = draft?.relationships.some((relationship) => (relationship.condition ?? '').trim() === '') ?? false
 
-  async function saveLayout() {
-    if (!mdl || !projectId) return
+  async function save() {
+    if (!draft || !projectId) return
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      const document = { ...mdl, layout: positions }
-      delete document.project_id
-      delete document.revision
-      delete document.status
       const response = await apiRequest(`/api/v1/projects/${projectId}/mdl`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(document),
+        body: JSON.stringify(withoutServerFields(draft)),
       })
-      if (!response.ok) throw new Error(`Could not save model layout (${response.status})`)
-      applyMdl(await response.json() as Mdl)
-      setNotice('Model layout saved.')
+      const body = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(describeFailure(body, `Could not save the model (${response.status})`))
+      load(body as Mdl)
+      setNotice('Model saved.')
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : 'Could not save model layout')
+      setError(reason instanceof Error ? reason.message : 'Could not save the model')
     } finally {
       setBusy(false)
     }
   }
 
-  async function deployModel() {
-    if (!mdl || !projectId) return
+  async function deploy() {
+    if (!draft || !projectId) return
     setBusy(true)
     setError(null)
     setNotice(null)
     try {
-      const revision = mdl.revision ? `?revision=${mdl.revision}` : ''
-      const response = await apiRequest(`/api/v1/projects/${projectId}/deploy${revision}`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        const failure = (await response.json()) as { detail?: unknown }
-        throw new Error(
-          typeof failure.detail === 'string'
-            ? failure.detail
-            : `Could not deploy model (${response.status})`,
-        )
-      }
-      const result = await response.json() as { version: number }
-      setNotice(`Model revision ${result.version} is deployed and ready for questions.`)
+      const revision = draft.revision ? `?revision=${draft.revision}` : ''
+      const response = await apiRequest(`/api/v1/projects/${projectId}/deploy${revision}`, { method: 'POST' })
+      const body = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(describeFailure(body, `Could not deploy model (${response.status})`))
+      setNotice(`Model revision ${(body as { version: number }).version} is deployed and ready for questions.`)
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not deploy model')
     } finally {
@@ -172,55 +112,73 @@ export function ModelCanvas({
     )
   }
 
+  const deployBlocked = dirty ? 'Save your changes before deploying.' : null
   return (
     <section className="model-workspace" aria-label="Semantic model editor">
       <header className="model-toolbar">
         <div>
           <span className="eyebrow">SEMANTIC MODEL</span>
           <h1>Connect and model</h1>
-          <p>Drag model cards to arrange the canvas. Use the keyboard to navigate nodes.</p>
+          <p>
+            Drag cards to arrange them, drag between cards to relate them, and select anything to edit it.
+            {dirty && ' You have unsaved changes.'}
+          </p>
         </div>
         <div className="model-toolbar-actions">
-          <button disabled={!mdl || busy} onClick={() => void saveLayout()} type="button">
-            {busy ? 'Saving…' : 'Save layout'}
-          </button>
-          <button disabled={!mdl || busy} onClick={() => void deployModel()} type="button">
-            {busy ? 'Working…' : 'Deploy model'}
+          <button disabled={!draft || busy || !dirty || incomplete} onClick={() => void save()} type="button">
+            {busy ? 'Saving…' : 'Save model'}
           </button>
         </div>
       </header>
       {error && <p className="model-message error" role="alert">{error}</p>}
       {notice && <p className="model-message" role="status">{notice}</p>}
-      {!mdl ? (
+      {incomplete && dirty && (
+        <p className="model-message error" role="alert">A relationship has no join condition yet.</p>
+      )}
+      {!draft ? (
         <div className="model-empty">No saved semantic model is available for this project.</div>
       ) : (
-        <div className="model-flow" role="region" aria-label="Model relationship canvas">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            fitView
-            nodesFocusable
-            edgesFocusable
-            fitViewOptions={{ padding: 0.2 }}
-            aria-label="Semantic model relationship graph"
-          >
-            <MiniMap pannable zoomable />
-            <Controls />
-            <Background />
-          </ReactFlow>
-        </div>
-      )}
-      {mdl && (
-        <ul className="model-node-list" aria-label="Models in this project">
-          {mdl.models.map((model) => (
-            <li key={model.name}>
-              <strong>{model.name}</strong>
-              <span>{model.tableReference}</span>
-              <span>{model.columns.length} columns</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="tab-bar" role="tablist" aria-label="Model sections">
+            {TABS.map((name) => (
+              <button
+                key={name}
+                role="tab"
+                type="button"
+                aria-selected={tab === name}
+                className={tab === name ? 'active' : undefined}
+                onClick={() => setTab(name)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+          {tab === 'Canvas' && (
+            <CanvasEditor apiRequest={apiRequest} projectId={projectId} mdl={draft} onChange={setDraft} />
+          )}
+          {tab === 'Metrics' && (
+            <MetricsEditor apiRequest={apiRequest} projectId={projectId} mdl={draft} onChange={setDraft} />
+          )}
+          {tab === 'Deploy report' && (
+            <DeployReport
+              apiRequest={apiRequest}
+              projectId={projectId}
+              revision={draft.revision}
+              disabledReason={deployBlocked}
+              onDeploy={() => void deploy()}
+              busy={busy}
+            />
+          )}
+          <ul className="model-node-list" aria-label="Models in this project">
+            {draft.models.map((model) => (
+              <li key={model.name}>
+                <strong>{model.name}</strong>
+                <span>{model.tableReference}</span>
+                <span>{model.columns.length} columns</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   )

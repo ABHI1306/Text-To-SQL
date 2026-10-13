@@ -2009,3 +2009,429 @@ td:first-child {
   font-size: 11px;
   font-weight: 650;
 }
+
+/* Day 4: canvas v2, metrics editor and deploy report */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e3e5eb;
+}
+
+.tab-bar button {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: #707684;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tab-bar button.active {
+  border-bottom-color: #4f46e5;
+  color: #303749;
+}
+
+.canvas-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+}
+
+.side-panel,
+.metrics-editor,
+.deploy-report {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e3e5eb;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 12px;
+}
+
+.side-panel {
+  max-height: min(64vh, 700px);
+  min-height: 420px;
+  overflow-y: auto;
+}
+
+.side-panel h2,
+.metrics-editor h2,
+.deploy-report h2 {
+  margin: 4px 0 8px;
+  font-size: 15px;
+}
+
+.side-panel h3,
+.metrics-editor h3,
+.deploy-report h3 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+}
+
+.side-panel-hint {
+  margin: 0 0 8px;
+  color: #707684;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: #505769;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.side-panel input,
+.side-panel select,
+.side-panel textarea,
+.metrics-editor input,
+.metrics-editor select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #d9dce4;
+  border-radius: 6px;
+  background: #fff;
+  color: #303749;
+  font: inherit;
+  font-size: 12px;
+}
+
+.side-panel button,
+.metrics-editor button,
+.deploy-report button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid #d9dce4;
+  border-radius: 6px;
+  background: #fff;
+  color: #303749;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.side-panel button:disabled,
+.metrics-editor button:disabled,
+.deploy-report button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.column-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.column-list small {
+  color: #8a90a0;
+}
+
+.add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.add-row input {
+  flex: 1 1 120px;
+}
+
+.compile-status {
+  margin: 4px 0 0;
+  padding: 0;
+  color: #707684;
+  font-size: 11px;
+  list-style: none;
+}
+
+.compile-status code {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: #505769;
+}
+
+.compile-status.ok {
+  color: #067647;
+}
+
+.compile-status.error {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.react-flow__edge.edge-incomplete path {
+  stroke: #b42318;
+  stroke-dasharray: 5 4;
+}
+
+.metrics-editor {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.metric-fields {
+  margin: 0 0 10px;
+  padding: 8px;
+  border: 1px solid #e3e5eb;
+  border-radius: 6px;
+}
+
+.metric-result pre {
+  margin: 0;
+  padding: 8px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: #f8f9fc;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.metric-result table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.metric-result th,
+.metric-result td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #e3e5eb;
+  text-align: left;
+}
+
+.coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.coverage div {
+  display: flex;
+  min-width: 150px;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid #e3e5eb;
+  border-radius: 8px;
+}
+
+.coverage strong {
+  font-size: 22px;
+}
+
+.coverage span {
+  color: #707684;
+  font-size: 11px;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.check-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.check-list li.ok span {
+  color: #067647;
+}
+
+.check-list li.failed span,
+.check-list li.failed em {
+  color: #b42318;
+}
+
+.check-list em {
+  color: #8a6d00;
+  font-size: 11px;
+  font-style: normal;
+}
+
+@media (max-width: 900px) {
+  .canvas-editor,
+  .metrics-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .side-panel {
+    max-height: none;
+    min-height: 0;
+  }
+}
+
+[data-review-theme="dark"] .tab-bar,
+[data-review-theme="dark"] .side-panel,
+[data-review-theme="dark"] .metrics-editor,
+[data-review-theme="dark"] .deploy-report,
+[data-review-theme="dark"] .coverage div,
+[data-review-theme="dark"] .metric-fields {
+  border-color: #343a4a;
+  background: #1b1f2a;
+  color: #d8dce8;
+}
+
+[data-review-theme="dark"] .side-panel input,
+[data-review-theme="dark"] .side-panel select,
+[data-review-theme="dark"] .side-panel textarea,
+[data-review-theme="dark"] .metrics-editor input,
+[data-review-theme="dark"] .metrics-editor select,
+[data-review-theme="dark"] .side-panel button,
+[data-review-theme="dark"] .metrics-editor button,
+[data-review-theme="dark"] .deploy-report button {
+  border-color: #343a4a;
+  background: #11141b;
+  color: #d8dce8;
+}
+
+[data-review-theme="dark"] .compile-status.error {
+  background: #3b1b1b;
+  color: #fda29b;
+}
+
+[data-review-theme="dark"] .metric-result pre {
+  background: #11141b;
+}
+
+.profile-menu {
+  position: relative;
+  margin-top: auto;
+}
+
+.profile-menu .profile-button {
+  margin-top: 0;
+}
+
+.profile-popover {
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid #e3e5eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(20 24 40 / 14%);
+}
+
+.profile-popover-head {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid #eef0f4;
+  font-size: 12px;
+}
+
+.profile-popover-head small {
+  color: #707684;
+}
+
+.profile-popover button {
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #303749;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile-popover button:hover,
+.profile-popover button:focus-visible {
+  background: #f1f2f7;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgb(20 24 40 / 40%);
+}
+
+.dialog {
+  display: flex;
+  width: min(380px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 10px;
+  background: #fff;
+  color: #303749;
+  font-size: 12px;
+}
+
+.dialog h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid #d9dce4;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dialog button[type="submit"] {
+  border-color: #4f46e5;
+  background: #4f46e5;
+  color: #fff;
+}
+
+[data-review-theme="dark"] .profile-popover,
+[data-review-theme="dark"] .dialog {
+  border-color: #343a4a;
+  background: #1b1f2a;
+  color: #d8dce8;
+}
+
+[data-review-theme="dark"] .profile-popover button,
+[data-review-theme="dark"] .dialog button {
+  color: #d8dce8;
+}

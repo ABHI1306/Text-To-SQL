@@ -3,10 +3,16 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_auth_service, get_current_context, get_repository
+from app.api.dependencies import (
+    get_audit_service,
+    get_auth_service,
+    get_current_context,
+    get_repository,
+)
 from app.api.routes import router
 from app.auth.models import AuthContext, AuthUser
 from app.auth.service import AuthService, hash_password
+from tests.support.audit import RecordingAudit
 
 
 class LoginRepository:
@@ -190,6 +196,7 @@ def test_user_manager_cannot_assign_a_role_with_unheld_capabilities() -> None:
     )
     app.dependency_overrides[get_current_context] = lambda: context
     app.dependency_overrides[get_repository] = lambda: RoleRepository()
+    app.dependency_overrides[get_audit_service] = lambda: RecordingAudit()
 
     with TestClient(app) as client:
         response = client.put(

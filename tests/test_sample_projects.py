@@ -13,10 +13,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import routes as api_routes
-from app.api.dependencies import get_auth_service, get_current_context, get_repository
+from app.api.dependencies import (
+    get_audit_service,
+    get_auth_service,
+    get_current_context,
+    get_repository,
+)
 from app.api.routes import SAMPLE_PROJECT_TEMPLATES, router
 from app.api.security import ConnectionTestError
 from app.auth.models import AuthContext
+from tests.support.audit import RecordingAudit
 
 ROOT = Path(__file__).resolve().parents[1]
 USER_ID = "00000000-0000-0000-0000-0000000000a1"
@@ -132,6 +138,8 @@ def _client(monkeypatch: pytest.MonkeyPatch, capabilities: set[str]) -> tuple[
     app.dependency_overrides[get_current_context] = lambda: context
     app.dependency_overrides[get_repository] = lambda: repository
     app.dependency_overrides[get_auth_service] = lambda: auth
+    repository.audit = RecordingAudit()  # type: ignore[attr-defined]
+    app.dependency_overrides[get_audit_service] = lambda: repository.audit  # type: ignore[attr-defined]
     return TestClient(app), repository, auth
 
 
@@ -165,6 +173,8 @@ def test_creating_a_sample_project_selects_tables_and_saves_a_draft_model(
     assert len(repository.calls[2][1]) == table_count
     assert len(FakeProfiling.requested) == table_count
     assert auth.invalidated == [USER_ID]
+    assert repository.audit.actions() == ["sample_project_created"]  # type: ignore[attr-defined]
+    assert repository.audit.events[0]["details"]["template"] == template_id  # type: ignore[attr-defined]
 
 
 def test_unknown_sample_template_is_404_and_saves_nothing(

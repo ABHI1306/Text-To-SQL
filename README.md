@@ -212,3 +212,23 @@ dataset as a baseline. Then run
 `uv run -- python scripts/evaluate_retrieval.py --project-id <project-uuid> --k 5`.
 Until approved cases exist, the runner reports `not_measurable`; it does not fabricate
 a recall score or claim SQL compilation accuracy.
+
+## Day 4 progress
+
+Implemented locally: the semantic compiler (`app/semantic/compiler.py`) with model CTEs,
+calculated fields, relationship-checked joins, metric expansion, bound-parameter row
+policies and typed errors; a 40-case compile test set that also runs against PostgreSQL;
+DDL-style prompt context (`app/semantic/prompt_context.py`); `POST /projects/{id}/compile-preview`
+(draft MDL, preview as a user, optional 10-row sample); row-policy storage, save-time
+validation and admin API (`/projects/{id}/row-policies`); an audit service and
+`GET /audit` browser with filters and paging; migration `0004_day4`. Apply it with
+`docker compose --env-file .env --profile tools run --rm migrate` before using the new endpoints.
+
+Also: the Connect and model screen now has a canvas with drag-to-relate, a side panel for
+descriptions, keys and calculated fields with live compiler checks, a metrics editor that
+previews compiled SQL and a sample result, and a deploy report tab
+(`GET /projects/{id}/deploy-report`). Row policies and Audit screens are still placeholders.
+
+Not done: the human checkpoint (3 test users, policy approval, DBA review of the compile
+cases), and routing questions through the compiler (Day 5). See `docs/DECISIONS.md` for the
+choices and their limits.

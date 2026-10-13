@@ -1,8 +1,8 @@
 {
-  "version": "v0",
+  "version": "v1",
   "status": "draft_pending_human_review",
   "dialect": "postgresql",
-  "source_note": "Day 3 starter set. The compiler (Day 4) does not exist yet; 'expect' describes compiled structure, not exact SQL. Model names come from the deployed E-commerce sample MDL. v1 (40 cases, Day 4) extends this file after DBA review.",
+  "source_note": "Day 4 compile test set v1 (40 cases). 'expect.sql' and 'expect.parameters' are the exact compiled output reviewed by the developer, not yet approved by a DBA; 'must_contain' are independent structural checks compared case-insensitively. The v0 draft metric used a cross-model dimension ('via'), which the MDL cannot express, so monthly_revenue is now defined over payments.",
   "model_overlay": {
     "calculated_fields": [
       {
@@ -14,18 +14,17 @@
     "metrics": [
       {
         "name": "monthly_revenue",
-        "base_model": "order_items",
+        "base_model": "payments",
         "dimensions": [
           {
             "name": "order_month",
-            "expression": "date_trunc('month', ordered_at)",
-            "via": "orders"
+            "expression": "date_trunc('month', paid_at)"
           }
         ],
         "measures": [
           {
             "name": "revenue",
-            "expression": "sum(quantity * unit_price)"
+            "expression": "sum(amount)"
           }
         ]
       }
@@ -40,13 +39,57 @@
         "name": "customers_region",
         "model": "customers",
         "predicate": "region = {{ user.region }}"
+      },
+      {
+        "name": "orders_not_cancelled",
+        "model": "orders",
+        "predicate": "status <> 'cancelled'",
+        "appliesTo": {
+          "roles": [
+            "restricted"
+          ]
+        }
+      },
+      {
+        "name": "payments_settled",
+        "model": "payments",
+        "predicate": "status = 'settled'",
+        "appliesTo": {
+          "roles": [
+            "restricted"
+          ]
+        }
+      },
+      {
+        "name": "inventory_region",
+        "model": "inventory",
+        "predicate": "warehouse_region = {{ user.regions }}",
+        "appliesTo": {
+          "exemptRoles": [
+            "warehouse_admin"
+          ]
+        }
       }
     ],
     "users": {
       "eu_user": {
         "region": "EU"
       },
-      "no_region_user": {}
+      "no_region_user": {},
+      "multi_region_user": {
+        "regions": [
+          "EU",
+          "UK"
+        ]
+      },
+      "restricted_user": {
+        "region": "EU"
+      },
+      "warehouse_admin_user": {}
+    },
+    "user_roles": {
+      "restricted_user": "restricted",
+      "warehouse_admin_user": "warehouse_admin"
     }
   },
   "cases": [
@@ -65,7 +108,9 @@
           "ecommerce.customers",
           "LIMIT 10"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_customers AS (SELECT first_name, last_name FROM ecommerce.customers) SELECT first_name, last_name FROM m_customers AS customers ORDER BY last_name LIMIT 10",
+        "parameters": {}
       }
     },
     {
@@ -81,7 +126,9 @@
         "must_contain": [
           "status = 'shipped'"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id, status FROM ecommerce.orders) SELECT order_id, status FROM m_orders AS orders WHERE status = 'shipped' LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -97,7 +144,9 @@
         "must_contain": [
           "GROUP BY"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT region FROM ecommerce.orders) SELECT region, COUNT(*) AS order_count FROM m_orders AS orders GROUP BY region LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -113,7 +162,9 @@
         "must_contain": [
           "ORDER BY"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_products AS (SELECT name, unit_price FROM ecommerce.products) SELECT name, unit_price FROM m_products AS products ORDER BY unit_price DESC LIMIT 5",
+        "parameters": {}
       }
     },
     {
@@ -129,7 +180,9 @@
         "must_contain": [
           "LIMIT 1000"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_customers AS (SELECT customer_id FROM ecommerce.customers) SELECT customer_id FROM m_customers AS customers LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -146,7 +199,9 @@
         "must_contain": [
           "JOIN"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id, customer_id FROM ecommerce.orders), m_customers AS (SELECT customer_id, first_name FROM ecommerce.customers) SELECT c.first_name, o.order_id FROM m_orders AS o JOIN m_customers AS c ON c.customer_id = o.customer_id LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -163,7 +218,9 @@
         "must_contain": [
           "SUM"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_order_items AS (SELECT product_id, quantity FROM ecommerce.order_items), m_products AS (SELECT product_id, name FROM ecommerce.products) SELECT p.name, SUM(oi.quantity) AS units FROM m_order_items AS oi JOIN m_products AS p ON p.product_id = oi.product_id GROUP BY p.name LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -180,7 +237,9 @@
         "must_contain": [
           "JOIN"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_payments AS (SELECT order_id, amount FROM ecommerce.payments), m_orders AS (SELECT order_id FROM ecommerce.orders) SELECT o.order_id, pay.amount FROM m_payments AS pay JOIN m_orders AS o ON o.order_id = pay.order_id LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -197,7 +256,9 @@
         "must_contain": [
           "LEFT JOIN"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_products AS (SELECT category_id, name FROM ecommerce.products), m_categories AS (SELECT category_id, name FROM ecommerce.categories) SELECT p.name, c.name AS category FROM m_products AS p LEFT JOIN m_categories AS c ON c.category_id = p.category_id LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -214,7 +275,9 @@
         "must_contain": [
           "customer_id = "
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id, customer_id FROM ecommerce.orders), m_customers AS (SELECT customer_id, email FROM ecommerce.customers) SELECT o.order_id, c.email FROM m_orders AS o JOIN m_customers AS c ON o.customer_id = c.customer_id LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -232,7 +295,9 @@
         "must_contain": [
           "GROUP BY"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_customers AS (SELECT customer_id, region FROM ecommerce.customers), m_orders AS (SELECT order_id, customer_id FROM ecommerce.orders), m_order_items AS (SELECT order_id, quantity FROM ecommerce.order_items) SELECT c.region, SUM(oi.quantity) AS units FROM m_customers AS c JOIN m_orders AS o ON o.customer_id = c.customer_id JOIN m_order_items AS oi ON oi.order_id = o.order_id GROUP BY c.region LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -248,7 +313,9 @@
         "must_contain": [
           "quantity * unit_price AS line_total"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_order_items AS (SELECT order_id, quantity * unit_price AS line_total FROM ecommerce.order_items) SELECT order_id, SUM(line_total) AS order_total FROM m_order_items AS order_items GROUP BY order_id LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -265,7 +332,9 @@
         "must_contain": [
           "quantity * unit_price AS line_total"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_order_items AS (SELECT product_id, quantity * unit_price AS line_total FROM ecommerce.order_items), m_products AS (SELECT product_id, name FROM ecommerce.products) SELECT p.name, SUM(oi.line_total) AS revenue FROM m_order_items AS oi JOIN m_products AS p ON p.product_id = oi.product_id GROUP BY p.name ORDER BY revenue DESC LIMIT 5",
+        "parameters": {}
       }
     },
     {
@@ -276,14 +345,15 @@
       "expect": {
         "status": "ok",
         "physical_relations": [
-          "ecommerce.order_items",
-          "ecommerce.orders"
+          "ecommerce.payments"
         ],
         "must_contain": [
           "date_trunc('month'",
           "GROUP BY"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_payments AS (SELECT paid_at, amount FROM ecommerce.payments), metric_monthly_revenue AS (SELECT DATE_TRUNC('MONTH', paid_at) AS order_month, SUM(amount) AS revenue FROM m_payments AS payments GROUP BY 1) SELECT order_month, revenue FROM metric_monthly_revenue AS monthly_revenue ORDER BY order_month LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -294,13 +364,14 @@
       "expect": {
         "status": "ok",
         "physical_relations": [
-          "ecommerce.order_items",
-          "ecommerce.orders"
+          "ecommerce.payments"
         ],
         "must_contain": [
           "2026-01-01"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_payments AS (SELECT paid_at, amount FROM ecommerce.payments), metric_monthly_revenue AS (SELECT DATE_TRUNC('MONTH', paid_at) AS order_month, SUM(amount) AS revenue FROM m_payments AS payments GROUP BY 1) SELECT revenue FROM metric_monthly_revenue AS monthly_revenue WHERE order_month >= CAST('2026-01-01' AS DATE) LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -316,7 +387,9 @@
         "must_contain": [
           "status"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT status, region FROM ecommerce.orders) SELECT x.status FROM m_orders AS x WHERE x.region = 'EU' LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -333,7 +406,11 @@
           "region = %(",
           "WHERE"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id FROM ecommerce.orders WHERE (region = %(p_region)s)) SELECT order_id FROM m_orders AS orders LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
       }
     },
     {
@@ -350,7 +427,11 @@
         "must_contain": [
           "region = %("
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id, customer_id FROM ecommerce.orders WHERE (region = %(p_region)s)), m_customers AS (SELECT customer_id, email FROM ecommerce.customers WHERE (region = %(p_region)s)) SELECT o.order_id, c.email FROM m_orders AS o JOIN m_customers AS c ON c.customer_id = o.customer_id LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
       }
     },
     {
@@ -367,7 +448,11 @@
         "must_contain": [
           "region = %("
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_customers AS (SELECT customer_id FROM ecommerce.customers WHERE (region = %(p_region)s)), m_orders AS (SELECT customer_id FROM ecommerce.orders WHERE (region = %(p_region)s)) SELECT customer_id FROM m_customers AS customers WHERE customer_id IN (SELECT customer_id FROM m_orders AS orders) LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
       }
     },
     {
@@ -383,7 +468,9 @@
         "must_contain": [
           "FALSE"
         ],
-        "must_not_contain": []
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id FROM ecommerce.orders WHERE FALSE) SELECT order_id FROM m_orders AS orders LIMIT 1000",
+        "parameters": {}
       }
     },
     {
@@ -484,6 +571,185 @@
       "expect": {
         "status": "error",
         "error_code": "SYNTAX_ERROR"
+      }
+    },
+    {
+      "id": "union-01",
+      "category": "set_operation",
+      "logical_sql": "SELECT customer_id FROM customers UNION SELECT customer_id FROM orders",
+      "user": "eu_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.customers",
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "UNION",
+          "region = %("
+        ],
+        "must_not_contain": [],
+        "sql": "WITH m_customers AS (SELECT customer_id FROM ecommerce.customers WHERE (region = %(p_region)s)), m_orders AS (SELECT customer_id FROM ecommerce.orders WHERE (region = %(p_region)s)) SELECT customer_id FROM m_customers AS customers UNION SELECT customer_id FROM m_orders AS orders LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
+      }
+    },
+    {
+      "id": "cte-01",
+      "category": "cte",
+      "logical_sql": "WITH recent AS (SELECT order_id, customer_id FROM orders WHERE status = 'shipped') SELECT customer_id FROM recent",
+      "user": "eu_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "WITH m_orders",
+          "region = %("
+        ],
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id, customer_id, status FROM ecommerce.orders WHERE (region = %(p_region)s)), recent AS (SELECT order_id, customer_id FROM m_orders AS orders WHERE status = 'shipped') SELECT customer_id FROM recent LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
+      }
+    },
+    {
+      "id": "policy-05",
+      "category": "row_policy_list",
+      "logical_sql": "SELECT product_id FROM inventory",
+      "user": "multi_region_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.inventory"
+        ],
+        "must_contain": [
+          "= ANY(%(p_regions)s)"
+        ],
+        "must_not_contain": [],
+        "sql": "WITH m_inventory AS (SELECT product_id FROM ecommerce.inventory WHERE (warehouse_region = ANY(%(p_regions)s))) SELECT product_id FROM m_inventory AS inventory LIMIT 1000",
+        "parameters": {
+          "p_regions": [
+            "EU",
+            "UK"
+          ]
+        }
+      }
+    },
+    {
+      "id": "policy-06",
+      "category": "row_policy_combined",
+      "logical_sql": "SELECT order_id FROM orders",
+      "user": "restricted_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "region = %(",
+          "status <> 'cancelled'",
+          " AND "
+        ],
+        "must_not_contain": [],
+        "sql": "WITH m_orders AS (SELECT order_id FROM ecommerce.orders WHERE (region = %(p_region)s) AND (status <> 'cancelled')) SELECT order_id FROM m_orders AS orders LIMIT 1000",
+        "parameters": {
+          "p_region": "EU"
+        }
+      }
+    },
+    {
+      "id": "policy-07",
+      "category": "row_policy_exemption",
+      "logical_sql": "SELECT product_id FROM inventory",
+      "user": "warehouse_admin_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.inventory"
+        ],
+        "must_contain": [
+          "ecommerce.inventory"
+        ],
+        "must_not_contain": [
+          "WHERE",
+          "%("
+        ],
+        "sql": "WITH m_inventory AS (SELECT product_id FROM ecommerce.inventory) SELECT product_id FROM m_inventory AS inventory LIMIT 1000",
+        "parameters": {}
+      }
+    },
+    {
+      "id": "policy-08",
+      "category": "row_policy_metric",
+      "logical_sql": "SELECT revenue FROM monthly_revenue",
+      "user": "restricted_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.payments"
+        ],
+        "must_contain": [
+          "status = 'settled'",
+          "GROUP BY"
+        ],
+        "must_not_contain": [],
+        "sql": "WITH m_payments AS (SELECT paid_at, amount FROM ecommerce.payments WHERE (status = 'settled')), metric_monthly_revenue AS (SELECT DATE_TRUNC('MONTH', paid_at) AS order_month, SUM(amount) AS revenue FROM m_payments AS payments GROUP BY 1) SELECT revenue FROM metric_monthly_revenue AS monthly_revenue LIMIT 1000",
+        "parameters": {}
+      }
+    },
+    {
+      "id": "policy-09",
+      "category": "row_policy_missing_attribute",
+      "logical_sql": "SELECT o.order_id, c.email FROM orders o JOIN customers c ON c.customer_id = o.customer_id",
+      "user": "no_region_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders",
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "WHERE FALSE"
+        ],
+        "must_not_contain": [
+          "%("
+        ],
+        "sql": "WITH m_orders AS (SELECT order_id, customer_id FROM ecommerce.orders WHERE FALSE), m_customers AS (SELECT customer_id, email FROM ecommerce.customers WHERE FALSE) SELECT o.order_id, c.email FROM m_orders AS o JOIN m_customers AS c ON c.customer_id = o.customer_id LIMIT 1000",
+        "parameters": {}
+      }
+    },
+    {
+      "id": "reject-11",
+      "category": "reject",
+      "logical_sql": "SELECT * INTO backup_orders FROM orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "NON_SELECT"
+      }
+    },
+    {
+      "id": "reject-12",
+      "category": "reject",
+      "logical_sql": "SELECT set_config('search_path', 'public', false)",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "DISALLOWED_FUNCTION"
+      }
+    },
+    {
+      "id": "reject-13",
+      "category": "reject",
+      "logical_sql": "SELECT a.order_id FROM orders a CROSS JOIN customers c",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "JOIN_NOT_ALLOWED"
       }
     }
   ]

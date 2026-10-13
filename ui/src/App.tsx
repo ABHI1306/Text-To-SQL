@@ -4,6 +4,7 @@ import { hasCapability } from './api/access'
 import type { components } from './api/schema'
 import { ModelCanvas } from './ModelCanvas'
 import { PasswordField } from './PasswordField'
+import { ProfileMenu } from './ProfileMenu'
 import { SetupWizard } from './SetupWizard'
 import './App.css'
 
@@ -234,6 +235,35 @@ function App() {
       setProfile(await loadProfile(accessToken))
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Password change failed')
+    }
+  }
+
+  async function changePassword(current: string, next: string): Promise<string | null> {
+    try {
+      const response = await apiRequest('/api/v1/auth/change-password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      })
+      if (response.ok) return null
+      const failure = await response.json().catch(() => null) as { detail?: unknown } | null
+      return typeof failure?.detail === 'string' ? failure.detail : 'Could not change the password'
+    } catch {
+      return 'Could not reach the server'
+    }
+  }
+
+  async function signOut() {
+    try {
+      await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+    } finally {
+      setAccessToken(null)
+      setProfile(null)
+      setSessionExpired(false)
+      setLoginPassword('')
+      setActivePage('Home')
+      setQueryAnswer(null)
+      setThreadHistory([])
     }
   }
 
@@ -483,11 +513,12 @@ function App() {
               )
             })}
           </nav>
-          <button className="profile-button" type="button">
-            <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
-            <span className="profile-copy"><strong>{username}</strong><small>{profile?.role ?? '…'}</small></span>
-            <span className="profile-role">{profile?.role === 'DBA' ? 'DBA' : profile?.role ?? '…'}</span>
-          </button>
+          <ProfileMenu
+            username={username}
+            role={profile?.role}
+            onChangePassword={changePassword}
+            onSignOut={signOut}
+          />
         </aside>
 
         {activePage === 'Home' ? (

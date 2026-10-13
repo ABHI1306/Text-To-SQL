@@ -64,6 +64,8 @@ const server = createServer(async (request, response) => {
       expires_in: 900,
       must_change_password: false,
     }
+  } else if (request.method === 'POST' && url.pathname === '/api/v1/auth/logout') {
+    status = 204
   } else if (request.method === 'POST' && url.pathname === '/api/v1/auth/change-password') {
     status = 204
   } else if (request.method === 'GET' && url.pathname === '/api/v1/me') {
@@ -147,6 +149,70 @@ const server = createServer(async (request, response) => {
         version: activeRevision,
         indexed_chunks: savedMdl.models.length,
         previous_version: null,
+      }
+    }
+  } else if (
+    request.method === 'POST'
+    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/compile-preview$/)
+  ) {
+    const input = JSON.parse(body)
+    const bad = (input.mdl?.models ?? [])
+      .flatMap((model) => model.columns)
+      .find((column) => column.isCalculated && String(column.expression).includes('ghost'))
+    const badMetric = (input.mdl?.metrics ?? [])
+      .flatMap((metric) => [...metric.dimensions, ...metric.measures])
+      .find((field) => String(field.expression).includes('ghost'))
+    const failing = bad ?? badMetric
+    if (failing) {
+      payload = {
+        ok: false,
+        sql: '',
+        parameters: {},
+        errors: [{
+          code: 'UNKNOWN_COLUMN',
+          message: "Column 'ghost' could not be resolved",
+          identifier: 'ghost',
+          suggestions: ['order_id'],
+        }],
+        preview: { asUserId: null, labeled: false },
+      }
+    } else {
+      payload = {
+        ok: true,
+        sql: `WITH m_mock AS (SELECT 1) /* ${input.logicalSql} */ SELECT * FROM m_mock LIMIT 1000`,
+        parameters: {},
+        errors: [],
+        preview: { asUserId: null, labeled: false },
+      }
+      if (input.sample) {
+        payload.sample = {
+          columns: ['order_month', 'revenue'],
+          rows: [['2026-01-01', 1200], ['2026-02-01', 980]],
+          truncated: false,
+        }
+      }
+    }
+  } else if (
+    request.method === 'GET'
+    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/deploy-report$/)
+  ) {
+    if (!savedMdl) {
+      status = 404
+      payload = { detail: 'MDL revision not found' }
+    } else {
+      const columns = savedMdl.models.flatMap((model) => model.columns)
+      const described = columns.filter((column) => (column.description ?? '').trim()).length
+      const modelsDescribed = savedMdl.models.filter((model) => (model.description ?? '').trim()).length
+      payload = {
+        project_id: project.id,
+        revision: savedMdl.revision,
+        models: { described: modelsDescribed, total: savedMdl.models.length, percent: Math.round(100 * modelsDescribed / savedMdl.models.length) },
+        columns: { described, total: columns.length, percent: columns.length ? Math.round(100 * described / columns.length) : 100 },
+        needsReview: savedMdl.models
+          .filter((model) => !(model.description ?? '').trim())
+          .map((model) => ({ model: model.name, modelDescribed: false, undescribedColumns: [] })),
+        checks: (savedMdl.metrics ?? []).map((metric) => ({ kind: 'metric', name: metric.name, ok: true, errors: [] })),
+        deployable: true,
       }
     }
   } else if (
