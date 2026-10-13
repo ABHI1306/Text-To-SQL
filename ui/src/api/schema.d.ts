@@ -206,6 +206,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["deployProjectMdl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["askProjectQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRoles"];
+        put?: never;
+        post: operations["createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/{role_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateRole"];
+        post?: never;
+        delete: operations["deleteRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUsers"];
+        put?: never;
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["assignUserRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/project-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getUserProjectAccess"];
+        put: operations["setUserProjectAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getUserAttributes"];
+        put: operations["setUserAttributes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/{role_id}/project-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getRoleProjectAccess"];
+        put: operations["setRoleProjectAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sample-projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSampleProjectTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sample-projects/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: "ecommerce" | "human-resources";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createSampleProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/threads": {
         parameters: {
             query?: never;
@@ -215,7 +407,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Planned contract; thread persistence is not part of Day 2. */
+        /** @description Planned contract; thread persistence is not implemented yet. */
         post: operations["createThread"];
         delete?: never;
         options?: never;
@@ -234,7 +426,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Planned contract; question execution is not part of Day 2. */
+        /** @description Planned contract; question execution is not implemented yet. */
         post: operations["askQuestion"];
         delete?: never;
         options?: never;
@@ -250,6 +442,21 @@ export interface components {
             username: string;
             /** Format: password */
             password: string;
+        };
+        RoleRequest: {
+            name: string;
+            description?: string;
+            capabilities?: string[];
+        };
+        UserRequest: {
+            username: string;
+            /** Format: password */
+            password: string;
+            /** @default User */
+            role: string;
+        };
+        ProjectAccessRequest: {
+            project_ids: string[];
         };
         AuthResponse: {
             access_token: string;
@@ -683,7 +890,9 @@ export interface operations {
     };
     getMdl: {
         parameters: {
-            query?: never;
+            query?: {
+                version?: number;
+            };
             header?: never;
             path: {
                 project_id: components["parameters"]["ProjectId"];
@@ -692,7 +901,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Latest saved semantic model and revision. */
+            /** @description Latest or selected saved semantic-model revision. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -728,6 +937,413 @@ export interface operations {
                 };
             };
             422: components["responses"]["Error"];
+        };
+    };
+    deployProjectMdl: {
+        parameters: {
+            query?: {
+                revision?: number;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Indexed and activated semantic-model revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        project_id?: string;
+                        version?: number;
+                        indexed_chunks?: number;
+                        previous_version?: string | null;
+                    };
+                };
+            };
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    askProjectQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    question: string;
+                };
+            };
+        };
+        responses: {
+            /** @description SQL and results returned from the connected PostgreSQL project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        sql: string;
+                        columns: string[];
+                        rows: unknown[][];
+                        retrieved_models: string[];
+                        model_version: number;
+                        elapsed_ms: number;
+                        truncated: boolean;
+                        /** @constant */
+                        source: "postgresql";
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description System and custom roles with capabilities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: {
+                            [key: string]: unknown;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Custom role created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    updateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Custom role updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Custom role deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Local accounts and assigned roles. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRequest"];
+            };
+        };
+        responses: {
+            /** @description Local account created; password change is required at first sign-in. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    assignUserRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    role: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Role assigned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUserProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project access assigned directly to the user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setUserProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Direct project access replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUserAttributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description User attributes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setUserAttributes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    attributes: Record<string, never>;
+                };
+            };
+        };
+        responses: {
+            /** @description Attributes replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRoleProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects granted to the role. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setRoleProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Role project access replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listSampleProjectTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available seeded project templates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createSampleProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: "ecommerce" | "human-resources";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sample project and initial semantic model created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Error"];
         };
     };
     createThread: {

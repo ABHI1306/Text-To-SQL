@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -128,7 +129,13 @@ class MemoryAuthRepository:
     def change_password(
         self, user_id: str, password_hash: str, keep_session_id: str, now: datetime
     ) -> None:
-        del user_id, password_hash, keep_session_id, now
+        del keep_session_id, now
+        self.user = replace(
+            self.user,
+            password_hash=password_hash,
+            must_change_password=False,
+        )
+        self.context = replace(self.context, must_change_password=False)
 
     def append_auth_audit(
         self, actor_id: str | None, action: str, username: str, details: dict[str, object]
@@ -212,6 +219,51 @@ def test_temporary_password_token_is_limited_to_password_change(
     ).must_change_password
 
 
+def test_password_change_invalidates_cached_temporary_password_context(
+    repository: MemoryAuthRepository,
+) -> None:
+    repository.context = replace(repository.context, must_change_password=True)
+    repository.user = replace(repository.user, must_change_password=True)
+    service = AuthService(
+        repository,
+        jwt_secret="unit-test-secret-that-is-at-least-32-bytes",
+    )
+    result = service.login("demo", "temporary-strong-password", "127.0.0.4")
+    context = service.authenticate_access_token(
+        result.access_token,
+        allow_password_change=True,
+    )
+
+    service.change_password(
+        context,
+        context.session_id or "",
+        "temporary-strong-password",
+        "a-new-strong-password",
+    )
+
+    updated = service.authenticate_access_token(result.access_token)
+    assert not updated.must_change_password
+    assert not service.login("demo", "a-new-strong-password", "127.0.0.4").user.must_change_password
+
+
+def test_invalidating_auth_context_refreshes_project_access(
+    repository: MemoryAuthRepository,
+) -> None:
+    service = AuthService(
+        repository,
+        jwt_secret="unit-test-secret-that-is-at-least-32-bytes",
+    )
+    result = service.login("demo", "temporary-strong-password", "127.0.0.4")
+    assert not service.authenticate_access_token(result.access_token).project_ids
+
+    repository.context = replace(repository.context, project_ids=frozenset({"project-1"}))
+    service.invalidate_auth_context("user-1")
+
+    assert service.authenticate_access_token(result.access_token).project_ids == {
+        "project-1"
+    }
+
+
 def test_password_policy_rejects_short_password(auth_service: AuthService) -> None:
     with pytest.raises(PasswordPolicyError):
         auth_service.create_password_hash("too-short")
@@ -232,3 +284,33 @@ def test_expired_access_tokens_are_rejected(repository: MemoryAuthRepository) ->
     )
     with pytest.raises(TokenError, match="invalid or expired"):
         service.authenticate_access_token(expired)
+
+
+def test_authorization_context_cache_expires_within_one_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.auth.service as auth_service_module
+
+    repository = MemoryAuthRepository()
+    reads = 0
+    original_get_context = repository.get_auth_context
+
+    def get_context(user_id: str) -> AuthContext | None:
+        nonlocal reads
+        reads += 1
+        return original_get_context(user_id)
+
+    repository.get_auth_context = get_context  # type: ignore[method-assign]
+    service = AuthService(
+        repository,
+        jwt_secret="unit-test-secret-that-is-at-least-32-bytes",
+    )
+    clock = 100.0
+    monkeypatch.setattr(auth_service_module.time, "monotonic", lambda: clock)
+    assert service._cached_auth_context("user-1") is not None
+    assert service._cached_auth_context("user-1") is not None
+    assert reads == 1
+
+    clock = 130.1
+    assert service._cached_auth_context("user-1") is not None
+    assert reads == 2

@@ -211,6 +211,49 @@ def test_day2_metadata_authentication_and_project_lifecycle() -> None:
             connection.execute("DELETE FROM users WHERE id = %s::uuid", (user_id,))
 
 
+def test_dba_reaches_every_project_but_other_roles_only_their_own() -> None:
+    dsn = _required_dsn("METADATA_APP_DSN")
+    repository = PostgresMetadataRepository(dsn)
+    suffix = uuid.uuid4().hex
+    owner_id = repository.bootstrap_dba(f"owner-{suffix}", hash_password("temporary-test-password"))
+    other_dba_id = repository.bootstrap_dba(
+        f"other-dba-{suffix}", hash_password("temporary-test-password")
+    )
+    user_id = repository.create_local_user(
+        f"plain-user-{suffix}", "User", hash_password("temporary-test-password")
+    )
+    project_id = str(uuid.uuid4())
+    try:
+        repository.create_project(
+            project_id=project_id,
+            name="DBA access integration project",
+            host="demo-db",
+            port=5432,
+            database_name="demo",
+            ssl_enabled=False,
+            encrypted_connection=b"unit-test-encrypted-credentials",
+            owner_id=owner_id,
+        )
+        other_dba = repository.get_auth_context(other_dba_id)
+        plain_user = repository.get_auth_context(user_id)
+        assert other_dba is not None and plain_user is not None
+        assert project_id in other_dba.project_ids
+        assert project_id not in plain_user.project_ids
+        assert project_id in {str(p["id"]) for p in repository.list_projects(other_dba_id)}
+        assert project_id not in {str(p["id"]) for p in repository.list_projects(user_id)}
+
+        repository.replace_user_project_access(user_id, [project_id])
+        granted = repository.get_auth_context(user_id)
+        assert granted is not None and project_id in granted.project_ids
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as connection:
+            connection.execute("DELETE FROM projects WHERE id = %s::uuid", (project_id,))
+            connection.execute(
+                "DELETE FROM users WHERE id = ANY(%s::uuid[])",
+                ([owner_id, other_dba_id, user_id],),
+            )
+
+
 def test_day2_authenticated_setup_api_end_to_end(monkeypatch) -> None:
     warehouse_dsn = _required_dsn("WAREHOUSE_DSN")
     credentials = conninfo_to_dict(warehouse_dsn)

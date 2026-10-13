@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Text-to-SQL Platform API
-  version: 0.2.0
-  description: Local authentication and PostgreSQL project setup APIs.
+  version: 0.3.0
+  description: Local authentication, PostgreSQL setup, semantic deployment, and role APIs.
 servers:
   - url: /api/v1
 paths:
@@ -268,9 +268,16 @@ paths:
       - $ref: "#/components/parameters/ProjectId"
     get:
       operationId: getMdl
+      parameters:
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
       responses:
         "200":
-          description: Latest saved semantic model and revision.
+          description: Latest or selected saved semantic-model revision.
           content:
             application/json:
               schema:
@@ -292,10 +299,307 @@ paths:
                 $ref: "#/components/schemas/Mdl"
         "422":
           $ref: "#/components/responses/Error"
+  /projects/{project_id}/deploy:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: deployProjectMdl
+      parameters:
+        - name: revision
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Indexed and activated semantic-model revision.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    format: uuid
+                  version:
+                    type: integer
+                  indexed_chunks:
+                    type: integer
+                  previous_version:
+                    type: string
+                    nullable: true
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/query:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: askProjectQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+      responses:
+        "200":
+          description: SQL and results returned from the connected PostgreSQL project.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - sql
+                  - columns
+                  - rows
+                  - retrieved_models
+                  - model_version
+                  - elapsed_ms
+                  - truncated
+                  - source
+                properties:
+                  sql:
+                    type: string
+                  columns:
+                    type: array
+                    items:
+                      type: string
+                  rows:
+                    type: array
+                    items:
+                      type: array
+                      items: {}
+                  retrieved_models:
+                    type: array
+                    items:
+                      type: string
+                  model_version:
+                    type: integer
+                  elapsed_ms:
+                    type: integer
+                  truncated:
+                    type: boolean
+                  source:
+                    type: string
+                    const: postgresql
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /roles:
+    get:
+      operationId: listRoles
+      responses:
+        "200":
+          description: System and custom roles with capabilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+    post:
+      operationId: createRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleRequest"
+      responses:
+        "201":
+          description: Custom role created.
+        "409":
+          $ref: "#/components/responses/Error"
+  /roles/{role_id}:
+    parameters:
+      - name: role_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoleRequest"
+      responses:
+        "200":
+          description: Custom role updated.
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRole
+      responses:
+        "204":
+          description: Custom role deleted.
+        "409":
+          $ref: "#/components/responses/Error"
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        "200":
+          description: Local accounts and assigned roles.
+    post:
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRequest"
+      responses:
+        "201":
+          description: Local account created; password change is required at first sign-in.
+        "409":
+          $ref: "#/components/responses/Error"
+  /users/{user_id}/role:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: assignUserRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+      responses:
+        "200":
+          description: Role assigned.
+  /users/{user_id}/project-access:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getUserProjectAccess
+      responses:
+        "200":
+          description: Project access assigned directly to the user.
+    put:
+      operationId: setUserProjectAccess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectAccessRequest"
+      responses:
+        "200":
+          description: Direct project access replaced.
+  /users/{user_id}/attributes:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getUserAttributes
+      responses:
+        "200":
+          description: User attributes.
+    put:
+      operationId: setUserAttributes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attributes]
+              properties:
+                attributes:
+                  type: object
+      responses:
+        "200":
+          description: Attributes replaced.
+  /roles/{role_id}/project-access:
+    parameters:
+      - name: role_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getRoleProjectAccess
+      responses:
+        "200":
+          description: Projects granted to the role.
+    put:
+      operationId: setRoleProjectAccess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectAccessRequest"
+      responses:
+        "200":
+          description: Role project access replaced.
+  /sample-projects:
+    get:
+      operationId: listSampleProjectTemplates
+      responses:
+        "200":
+          description: Available seeded project templates.
+  /sample-projects/{template_id}:
+    parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [ecommerce, human-resources]
+    post:
+      operationId: createSampleProject
+      responses:
+        "201":
+          description: Sample project and initial semantic model created.
+        "503":
+          $ref: "#/components/responses/Error"
   /threads:
     post:
       operationId: createThread
-      description: Planned contract; thread persistence is not part of Day 2.
+      description: Planned contract; thread persistence is not implemented yet.
       requestBody:
         required: true
         content:
@@ -324,7 +628,7 @@ paths:
           format: uuid
     post:
       operationId: askQuestion
-      description: Planned contract; question execution is not part of Day 2.
+      description: Planned contract; question execution is not implemented yet.
       requestBody:
         required: true
         content:
@@ -368,6 +672,54 @@ components:
         password:
           type: string
           format: password
+    RoleRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: "^[A-Za-z][A-Za-z0-9 _-]*$"
+        description:
+          type: string
+          maxLength: 500
+        capabilities:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+    UserRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 128
+          pattern: "^[A-Za-z0-9_.@-]+$"
+        password:
+          type: string
+          minLength: 12
+          format: password
+        role:
+          type: string
+          default: User
+    ProjectAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [project_ids]
+      properties:
+        project_ids:
+          type: array
+          maxItems: 500
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
     AuthResponse:
       type: object
       required: [access_token, token_type, expires_in, must_change_password]

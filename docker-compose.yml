@@ -75,6 +75,7 @@ services:
       LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-5}
       LOGIN_LOCKOUT_SECONDS: ${LOGIN_LOCKOUT_SECONDS:-900}
       SQL_MODEL: ${SQL_MODEL:-llama3:latest}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text:latest}
     ports:
       - "8000:8000"
     depends_on:

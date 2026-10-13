@@ -8,6 +8,7 @@ let project = {
 let selectedTables = []
 let mdlRevision = 0
 let savedMdl
+let activeRevision = null
 
 const catalog = [
   { schema: 'ecommerce', table: 'customers', approx_rows: 1200, column_count: 5 },
@@ -82,6 +83,7 @@ const server = createServer(async (request, response) => {
     me.projects = [project]
     selectedTables = []
     savedMdl = undefined
+    activeRevision = null
     payload = project
   } else if (request.method === 'GET' && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/setup$/)) {
     payload = {
@@ -131,6 +133,41 @@ const server = createServer(async (request, response) => {
       status = 404
       payload = { detail: 'Project has no saved MDL' }
     }
+  } else if (
+    request.method === 'POST'
+    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/deploy$/)
+  ) {
+    if (!savedMdl) {
+      status = 409
+      payload = { detail: 'Save a model before deployment' }
+    } else {
+      activeRevision = Number(url.searchParams.get('revision') ?? savedMdl.revision)
+      payload = {
+        project_id: project.id,
+        version: activeRevision,
+        indexed_chunks: savedMdl.models.length,
+        previous_version: null,
+      }
+    }
+  } else if (
+    request.method === 'POST'
+    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/query$/)
+  ) {
+    if (!activeRevision) {
+      status = 409
+      payload = { detail: 'Deploy a semantic model before asking questions' }
+    } else {
+      payload = {
+        sql: 'SELECT customer_id, first_name FROM ecommerce.customers ORDER BY customer_id LIMIT 5',
+        columns: ['customer_id', 'first_name'],
+        rows: [[1, 'Mock customer'], [2, 'Preview customer']],
+        retrieved_models: ['customers'],
+        model_version: activeRevision,
+        elapsed_ms: 12,
+        truncated: false,
+        source: 'mock',
+      }
+    }
   } else if (request.method === 'POST' && url.pathname === '/api/v1/threads') {
     const input = JSON.parse(body)
     status = 201
@@ -161,6 +198,7 @@ const server = createServer(async (request, response) => {
   response.end(status === 204 ? undefined : JSON.stringify(payload))
 })
 
-server.listen(4010, '127.0.0.1', () => {
-  console.log('Mock API listening at http://127.0.0.1:4010')
+const port = Number(process.env.VITE_MOCK_API_PORT ?? '4010')
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Mock API listening at http://127.0.0.1:${port}`)
 })

@@ -99,4 +99,5 @@ def require_capability(capability: str) -> Callable[..., AuthContext]:
             )
         return context
 
+    check.required_capability = capability  # type: ignore[attr-defined]
     return check

@@ -1,4 +1,9 @@
+from collections.abc import Generator
+from contextlib import contextmanager
+from tempfile import NamedTemporaryFile
+
 import psycopg
+from psycopg.conninfo import make_conninfo
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
@@ -16,6 +21,7 @@ class PostgresWarehouseAdapter:
         *,
         statement_timeout_ms: int = 10_000,
         max_rows: int = 1_000,
+        ssl_ca_certificate: str | None = None,
     ) -> None:
         if not dsn:
             raise ValueError("A warehouse DSN is required")
@@ -26,6 +32,20 @@ class PostgresWarehouseAdapter:
         self._dsn = dsn
         self._statement_timeout_ms = statement_timeout_ms
         self._max_rows = max_rows
+        self._ssl_ca_certificate = ssl_ca_certificate
+
+    @contextmanager
+    def _connect(self) -> Generator[psycopg.Connection[tuple[object, ...]], None, None]:
+        if self._ssl_ca_certificate is None:
+            with psycopg.connect(self._dsn) as connection:
+                yield connection
+            return
+        with NamedTemporaryFile(mode="w", encoding="utf-8") as certificate_file:
+            certificate_file.write(self._ssl_ca_certificate)
+            certificate_file.flush()
+            dsn = make_conninfo(self._dsn, sslrootcert=certificate_file.name)
+            with psycopg.connect(dsn) as connection:
+                yield connection
 
     @staticmethod
     def _ensure_read_only_select(sql: str) -> None:
@@ -58,7 +78,7 @@ class PostgresWarehouseAdapter:
             raise ValueError(f"max_rows must be between 1 and {self._max_rows}")
         self._ensure_read_only_select(query.sql)
 
-        with psycopg.connect(self._dsn) as connection, connection.cursor() as cursor:
+        with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")
             cursor.execute(
                 "SELECT set_config('statement_timeout', %s, true)",
@@ -68,5 +88,6 @@ class PostgresWarehouseAdapter:
             columns = tuple(column.name for column in cursor.description or ())
             fetched_rows = cursor.fetchmany(max_rows + 1)
             rows = tuple(tuple(row) for row in fetched_rows[:max_rows])
+            truncated = len(fetched_rows) > max_rows
 
-        return QueryResult(columns=columns, rows=rows)
+        return QueryResult(columns=columns, rows=rows, truncated=truncated)

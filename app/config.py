@@ -25,6 +25,7 @@ class Settings:
     login_max_failures: int
     login_lockout_seconds: int
     sql_model: str
+    embedding_model: str = "nomic-embed-text:latest"
 
 
 def get_settings() -> Settings:
@@ -56,6 +57,7 @@ def get_settings() -> Settings:
         login_max_failures=int(os.getenv("LOGIN_MAX_FAILURES", "5")),
         login_lockout_seconds=int(os.getenv("LOGIN_LOCKOUT_SECONDS", "900")),
         sql_model=os.getenv("SQL_MODEL", "llama3:latest"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text:latest"),
     )
 
 

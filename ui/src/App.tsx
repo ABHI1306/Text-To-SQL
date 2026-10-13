@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 
 import { hasCapability } from './api/access'
 import type { components } from './api/schema'
+import { ModelCanvas } from './ModelCanvas'
+import { PasswordField } from './PasswordField'
 import { SetupWizard } from './SetupWizard'
 import './App.css'
 
@@ -9,6 +11,7 @@ type Me = components['schemas']['Me']
 type AuthResponse = components['schemas']['AuthResponse']
 type Page =
   | 'Home'
+  | 'Shared with me'
   | 'Dashboards'
   | 'Scheduled questions'
   | 'Setup'
@@ -24,8 +27,9 @@ type ReviewRole = 'DBA' | 'Admin' | 'User' | 'Custom: Analyst+'
 type ReviewTheme = 'Light' | 'Dark'
 type ReviewViewport = 'Desktop 1280' | 'Mobile 390'
 
-const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN'; capability: string }[] = [
+const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capability: string }[] = [
   { page: 'Home', group: 'ASK', capability: 'ask_question' },
+  { page: 'Shared with me', group: 'ASK', capability: 'view_shared' },
   { page: 'Dashboards', group: 'WORK', capability: 'create_dashboard' },
   { page: 'Scheduled questions', group: 'WORK', capability: 'schedule_question' },
   { page: 'Setup', group: 'ADMIN', capability: 'manage_connection' },
@@ -33,46 +37,15 @@ const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN'; capability: str
   { page: 'Drift and profiling', group: 'ADMIN', capability: 'manage_profiling' },
   { page: 'Knowledge', group: 'ADMIN', capability: 'manage_knowledge' },
   { page: 'Row policies', group: 'ADMIN', capability: 'manage_policies' },
-  { page: 'Users and roles', group: 'ADMIN', capability: 'manage_users' },
-  { page: 'Audit', group: 'ADMIN', capability: 'view_audit' },
-  { page: 'Evaluation', group: 'ADMIN', capability: 'run_eval' },
+  { page: 'Users and roles', group: 'SYSTEM', capability: 'manage_users' },
+  { page: 'Audit', group: 'SYSTEM', capability: 'view_audit' },
+  { page: 'Evaluation', group: 'SYSTEM', capability: 'run_eval' },
 ]
 
-const threads = [
-  'Top 5 customers by net revenue last quarter',
-  'Refund rate by product category',
-  'Orders delayed over 3 days, EU',
-  'Average order value by region',
-  'New customers per month, 2026',
-  'Inventory below reorder point',
-]
+// Failed scheduled runs and drift reports arrive with the notification API (Day 7/8).
+const notificationCount = 0
 
-const tableRows = [
-  ['1', 'Northwind Traders', '1,284,500.00'],
-  ['2', 'Helios Retail', '1,102,340.00'],
-  ['3', 'Brightside GmbH', '968,720.00'],
-  ['4', 'Corvid & Sons', '874,115.00'],
-  ['5', 'Alpine Outfitters', '812,060.00'],
-]
-
-const sqlText = `SELECT c.customer_name,
-       SUM(o.net_revenue) AS net_revenue
-FROM orders o
-JOIN customers c ON c.id = o.customer_id
-WHERE o.order_date >= DATE '2026-07-01'
-  AND o.order_date <  DATE '2026-10-01'
-GROUP BY c.customer_name
-ORDER BY net_revenue DESC
-LIMIT 5`
-
-const steps = [
-  { title: 'Intent', detail: 'Aggregate: revenue ranking, period “last quarter”', duration: '0.3 s', status: 'done' },
-  { title: 'Retrieval', detail: '2 models, 1 SQL pair, 1 instruction', duration: '0.4 s', status: 'done', tags: ['orders', 'customers', 'pair: “revenue by customer”', 'rule: net = gross − refunds'] },
-  { title: 'SQL candidate', detail: 'Attempt 1 of 3 · Column order_dt is not in the model', duration: '0.6 s', status: 'error' },
-  { title: 'Correction', detail: 'Attempt 2 of 3 · Replaced order_dt with order_date', duration: '0.5 s', status: 'done' },
-  { title: 'Compilation', detail: 'Logical SQL compiled to PostgreSQL', duration: '0.1 s', status: 'done' },
-  { title: 'Validation', detail: 'Read-only, 1 policy applied, cost within limit', duration: '0.5 s', status: 'done' },
-]
+const mobileNavigation: Page[] = ['Home', 'Shared with me', 'Dashboards']
 
 const suggestions = [
   'Break it down by region',
@@ -83,6 +56,25 @@ const suggestions = [
 const reviewRoles: ReviewRole[] = ['DBA', 'Admin', 'User', 'Custom: Analyst+']
 const reviewStates = ['Success', 'Streaming', 'Clarifying', 'Out of scope', 'Typed failure', 'Empty result', 'LLM unavailable']
 const setupSteps = ['Choose source', '1 Connect', '2 Tables', '3 Relationships']
+
+function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  return JSON.stringify(value) ?? String(value)
+}
+
+type QueryAnswer = {
+  sql: string
+  columns: string[]
+  rows: unknown[][]
+  retrieved_models: string[]
+  model_version: number
+  elapsed_ms: number
+  truncated: boolean
+  source: 'postgresql' | 'mock'
+}
 
 function App() {
   const [profile, setProfile] = useState<Me | null>(null)
@@ -97,12 +89,15 @@ function App() {
     Partial<components['schemas']['ConnectionRequest']>
   >({})
   const [activePage, setActivePage] = useState<Page>('Home')
-  const [activeThread, setActiveThread] = useState(threads[0])
+  const [activeThread, setActiveThread] = useState<string | null>(null)
+  const [threadHistory, setThreadHistory] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [showSql, setShowSql] = useState(false)
+  const [queryAnswer, setQueryAnswer] = useState<QueryAnswer | null>(null)
+  const [queryError, setQueryError] = useState<string | null>(null)
+  const [queryBusy, setQueryBusy] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [traceVisible, setTraceVisible] = useState(true)
   const [userPreview, setUserPreview] = useState('Myself')
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -246,33 +241,58 @@ function App() {
     () => navigation.filter(({ capability }) => hasCapability(profile?.capabilities ?? [], capability)),
     [profile],
   )
-  const visibleThreads = threads.filter((thread) => thread.toLowerCase().includes(search.toLowerCase()))
+  const visibleThreads = threadHistory.filter((thread) =>
+    thread.toLowerCase().includes(search.toLowerCase()),
+  )
 
   async function submitQuestion(question = query) {
     const trimmed = question.trim()
     if (!trimmed) return
+    const projectId = profile?.projects[0]?.id
+    if (!projectId) {
+      setQueryError('Create or select a PostgreSQL project before asking questions.')
+      return
+    }
     setQuery('')
     setActiveThread(trimmed)
-    setNotice('This is a design preview. The live question pipeline is not connected yet.')
+    setThreadHistory((history) => [
+      trimmed,
+      ...history.filter((item) => item !== trimmed),
+    ].slice(0, 20))
+    setQueryAnswer(null)
+    setQueryError(null)
+    setNotice(null)
+    setQueryBusy(true)
     try {
-      await apiRequest('/api/v1/threads/6b8b4567-e89b-12d3-a456-426614174002/ask', {
+      const response = await apiRequest(`/api/v1/projects/${projectId}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ question: trimmed }),
       })
-    } catch {
-      setNotice('Mock API is unavailable. The live question pipeline is not connected yet.')
+      if (!response.ok) {
+        const failure = (await response.json()) as { detail?: unknown }
+        const message = typeof failure.detail === 'string'
+          ? failure.detail
+          : `Question failed (${response.status})`
+        throw new Error(message)
+      }
+      setQueryAnswer((await response.json()) as QueryAnswer)
+    } catch (reason: unknown) {
+      setQueryError(reason instanceof Error ? reason.message : 'Question failed')
+    } finally {
+      setQueryBusy(false)
     }
   }
 
-  async function copySql() {
-    await navigator.clipboard.writeText(sqlText)
+  async function copySql(sql: string) {
+    await navigator.clipboard.writeText(sql)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1600)
   }
 
   const selectedProject = profile?.projects[0]?.name ?? 'Loading project'
   const username = profile?.username ?? 'Loading account'
+  const selectedProjectId = profile?.projects[0]?.id
 
   if (!authReady) {
     return <main className="auth-page" aria-live="polite">Checking local session…</main>
@@ -303,38 +323,29 @@ function App() {
                   value={loginUsername}
                 />
               </label>
-              <label>Password
-                <input
+              <PasswordField label="Password"
                   autoComplete="current-password"
                   onChange={(event) => setLoginPassword(event.target.value)}
                   required
-                  type="password"
                   value={loginPassword}
                 />
-              </label>
             </>
           )}
           {mustChangePassword && (
             <>
-              <label>Temporary password
-                <input
+              <PasswordField label="Temporary password"
                   autoComplete="current-password"
                   onChange={(event) => setLoginPassword(event.target.value)}
                   required
-                  type="password"
                   value={loginPassword}
                 />
-              </label>
-              <label>New password
-                <input
+              <PasswordField label="New password"
                   autoComplete="new-password"
                   minLength={12}
                   onChange={(event) => setNewPassword(event.target.value)}
                   required
-                  type="password"
                   value={newPassword}
                 />
-              </label>
             </>
           )}
           {error && <p className="auth-error" role="alert">{error}</p>}
@@ -451,7 +462,7 @@ function App() {
             <small>acme_prod · PostgreSQL 16</small>
           </button>
           <nav className="product-nav" aria-label="Main navigation">
-            {(['ASK', 'WORK', 'ADMIN'] as const).map((group) => {
+            {(['ASK', 'WORK', 'ADMIN', 'SYSTEM'] as const).map((group) => {
               const items = visibleNavigation.filter((item) => item.group === group)
               if (!items.length) return null
               return (
@@ -480,20 +491,31 @@ function App() {
         </aside>
 
         {activePage === 'Home' ? (
-          <main className={`workspace${traceVisible ? '' : ' trace-collapsed'}`}>
+          <main className="workspace">
           <header className="workspace-topbar">
             <button className="icon-button menu-button" type="button" aria-label="Toggle navigation">☰</button>
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>Home</span></div>
             <div className="topbar-actions">
               <span className="local-status"><i />Local only · acme-db-01.internal</span>
-              <button className="icon-button notification-button" type="button" aria-label="Notifications">♧<b>2</b></button>
+              <button
+                className="icon-button notification-button"
+                type="button"
+                aria-label={notificationCount ? `Notifications, ${notificationCount} unread` : 'Notifications'}
+              >
+                ♧{notificationCount > 0 && <b>{notificationCount}</b>}
+              </button>
             </div>
           </header>
           {error && <div className="profile-error" role="alert">{error}</div>}
 
           <div className="workspace-columns">
             <aside className="thread-sidebar">
-              <button className="new-thread-button" onClick={() => { setActiveThread('New question'); setNotice(null) }} type="button">
+              <button className="new-thread-button" onClick={() => {
+                setActiveThread(null)
+                setQueryAnswer(null)
+                setQueryError(null)
+                setNotice(null)
+              }} type="button">
                 <span>＋</span> New thread
               </button>
               <label className="thread-search">
@@ -505,118 +527,125 @@ function App() {
                   value={search}
                 />
               </label>
-              <span className="thread-date">TODAY</span>
+              <span className="thread-date">THIS SESSION</span>
               <div className="thread-list">
                 {visibleThreads.map((thread) => (
                   <button
                     className={`thread-item${thread === activeThread ? ' active' : ''}`}
                     key={thread}
-                    onClick={() => { setActiveThread(thread); setNotice(null) }}
+                    onClick={() => void submitQuestion(thread)}
                     type="button"
                   >
                     {thread}
                   </button>
                 ))}
+                {visibleThreads.length === 0 && (
+                  <span className="thread-empty">Your questions will appear here.</span>
+                )}
               </div>
             </aside>
 
             <section className="conversation" aria-label="Question and answer">
               <div className="conversation-scroll">
-                <div className="question-row">
-                  <div className="question-spacer" />
-                  <div className="question-bubble">{activeThread}</div>
-                </div>
-
-                <div className="result-content">
-                  <div className="result-labels">
-                    <span className="computed-label">Illustrative sample</span>
-                    <span className="model-label">Orders · Customers · model v3</span>
+                {!activeThread && !queryBusy && (
+                  <div className="conversation-empty">
+                    <span className="eyebrow">ASK YOUR DATA</span>
+                    <h1>What would you like to know?</h1>
+                    <p>Ask a question about the connected PostgreSQL project. Answers show live query results.</p>
+                    {!selectedProjectId && <p role="status">Create a project in Setup to get started.</p>}
                   </div>
-
-                  {notice && <div className="preview-notice" role="status">{notice}</div>}
-
-                  <section className="trace-card" aria-label="Question execution steps">
-                    <div className="trace-heading">
-                      <strong>Steps · 6 steps · 2.4 s</strong>
-                      <button className="text-button" onClick={() => setTraceVisible(false)} type="button">Hide</button>
+                )}
+                {activeThread && (
+                  <div className="question-row">
+                    <div className="question-spacer" />
+                    <div className="question-bubble">{activeThread}</div>
+                  </div>
+                )}
+                {queryBusy && <div className="query-progress" role="status">Retrieving the deployed model and querying PostgreSQL…</div>}
+                {queryError && <div className="query-error" role="alert">{queryError}</div>}
+                {notice && <div className="preview-notice" role="status">{notice}</div>}
+                {queryAnswer && (
+                  <div className="result-content">
+                    <div className="result-labels">
+                      <span className="computed-label">
+                        {queryAnswer.source === 'postgresql' ? 'PostgreSQL results' : 'Mock preview data'}
+                      </span>
+                      <span className="model-label">
+                        {queryAnswer.retrieved_models.join(' · ')} · model v{queryAnswer.model_version}
+                      </span>
                     </div>
-                    <div className="trace-steps">
-                      {steps.map((step) => (
-                        <div className={`trace-step ${step.status}`} key={step.title}>
-                          <span className="step-status" aria-hidden="true">{step.status === 'error' ? '×' : '✓'}</span>
-                          <div className="step-body">
-                            <div className="step-main"><strong>{step.title}</strong><span>{step.detail}</span></div>
-                            {step.tags && <div className="trace-tags">{step.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-                          </div>
-                          <time>{step.duration}</time>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                  {!traceVisible && <button className="show-trace-button" onClick={() => setTraceVisible(true)} type="button">Show execution steps</button>}
-
-                  <section className="data-card">
-                    <div className="data-card-heading">
-                      <strong>Net revenue by customer · Q3 2026</strong>
-                      <div><span>5 rows</span><span className="truncate-label">Truncated: showing 1000 rows</span></div>
-                    </div>
-                    {showSql ? (
-                      <pre className="sql-viewer"><code>{sqlText}</code></pre>
-                    ) : (
-                      <div className="table-scroll">
-                        <table>
-                          <thead><tr><th>#</th><th>Customer name</th><th>Net revenue (EUR)</th></tr></thead>
-                          <tbody>{tableRows.map(([rank, customer, revenue]) => (
-                            <tr key={rank}><td>{rank}</td><td>{customer}</td><td>{revenue}</td></tr>
-                          ))}</tbody>
-                        </table>
+                    <section className="trace-card" aria-label="Question execution steps">
+                      <div className="trace-heading">
+                        <strong>Query completed · {queryAnswer.elapsed_ms} ms</strong>
                       </div>
-                    )}
-                  </section>
-
-                  <p className="answer-copy">
-                    Northwind Traders led Q3 2026 with <strong>€1,284,500</strong> in net revenue,
-                    followed by Helios Retail (€1,102,340). The top five customers account for €5,041,735.
-                  </p>
-
-                  <div className="answer-toolbar">
-                    <div className="chart-switch"><span>Chart</span><button type="button">Bar</button><button type="button">Line</button></div>
-                    <div className="sql-actions">
-                      <button className={showSql ? 'selected' : ''} onClick={() => setShowSql(false)} type="button">Results</button>
-                      <button className={showSql ? 'selected' : ''} onClick={() => setShowSql(true)} type="button">Logical SQL</button>
-                      <button disabled type="button" title="SQL execution is not implemented yet">Compiled SQL</button>
+                      <div className="trace-steps">
+                        {[
+                          ['Retrieval', queryAnswer.retrieved_models.join(', ')],
+                          ['SQL safety check', 'Single read-only query; retrieved tables and columns checked'],
+                          ['PostgreSQL', `${queryAnswer.rows.length} row${queryAnswer.rows.length === 1 ? '' : 's'} returned${queryAnswer.truncated ? ' (results capped)' : ''}`],
+                        ].map(([title, detail]) => (
+                          <div className="trace-step done" key={title}>
+                            <span className="step-status" aria-hidden="true">✓</span>
+                            <div className="step-body">
+                              <div className="step-main"><strong>{title}</strong><span>{detail}</span></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                    <section className="data-card">
+                      <div className="data-card-heading">
+                        <strong>Query results</strong>
+                        <div>
+                          <span>{queryAnswer.rows.length} rows</span>
+                          {queryAnswer.truncated && <span className="truncate-label">Showing first {queryAnswer.rows.length} rows</span>}
+                        </div>
+                      </div>
+                      {showSql ? (
+                        <pre className="sql-viewer"><code>{queryAnswer.sql}</code></pre>
+                      ) : queryAnswer.columns.length === 0 ? (
+                        <p className="no-results">The query returned no tabular columns.</p>
+                      ) : (
+                        <div className="table-scroll">
+                          <table>
+                            <thead><tr>{queryAnswer.columns.map((column, index) => <th key={`${column}-${index}`}>{column}</th>)}</tr></thead>
+                            <tbody>
+                              {queryAnswer.rows.map((row, rowIndex) => (
+                                <tr key={rowIndex}>
+                                  {queryAnswer.columns.map((column, columnIndex) => (
+                                    <td key={`${column}-${columnIndex}`}>{formatCell(row[columnIndex])}</td>
+                                  ))}
+                                </tr>
+                              ))}
+                              {queryAnswer.rows.length === 0 && (
+                                <tr><td colSpan={queryAnswer.columns.length}>No rows matched this question.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+                    <div className="answer-toolbar">
+                      <div className="sql-actions">
+                        <button className={!showSql ? 'selected' : ''} onClick={() => setShowSql(false)} type="button">Results</button>
+                        <button className={showSql ? 'selected' : ''} onClick={() => setShowSql(true)} type="button">SQL</button>
+                      </div>
+                    </div>
+                    <div className="result-actions">
+                      <button onClick={() => void submitQuestion(activeThread ?? '')} type="button">Re-run</button>
+                      <button onClick={() => void copySql(queryAnswer.sql)} type="button">{copied ? 'Copied' : 'Copy SQL'}</button>
+                      <span className="action-divider" />
+                      <button aria-label="Good answer" className={feedback === 'up' ? 'feedback-selected' : ''} onClick={() => setFeedback('up')} type="button">👍</button>
+                      <button aria-label="Poor answer" className={feedback === 'down' ? 'feedback-selected' : ''} onClick={() => setFeedback('down')} type="button">👎</button>
                     </div>
                   </div>
-                  <div className="result-actions">
-                    <button onClick={() => setNotice('SQL editing will be available when the compiler and execution pipeline are connected.')} type="button">Edit</button>
-                    <button onClick={() => setNotice('Re-run is not available in the design preview.')} type="button">Re-run</button>
-                    <button onClick={() => void copySql()} type="button">{copied ? 'Copied' : 'Copy SQL'}</button>
-                    <span className="action-divider" />
-                    <button aria-label="Good answer" className={feedback === 'up' ? 'feedback-selected' : ''} onClick={() => setFeedback('up')} type="button">👍</button>
-                    <button aria-label="Poor answer" className={feedback === 'down' ? 'feedback-selected' : ''} onClick={() => setFeedback('down')} type="button">👎</button>
-                    <span className="action-divider" />
-                    <button onClick={() => setNotice('Pinning will be available when dashboards are connected.')} type="button">Pin to dashboard</button>
-                    <button onClick={() => setNotice('Scheduling will be available when the worker is connected.')} type="button">Schedule</button>
-                    <button onClick={() => setNotice('Sharing will be available when sharing permissions are connected.')} type="button">Share</button>
-                  </div>
-
-                  <div className="followup-card">
-                    <div className="followup-question">what about last year?</div>
-                    <span className="followup-context">Computed for you · Used previous question as context</span>
-                    <div className="followup-answer">
-                      <span>Northwind Traders</span><strong>€1,061,880</strong>
-                      <span>Helios Retail</span><strong>€1,009,415</strong>
-                    </div>
-                    <p>In 2025, Northwind Traders also ranked first. Alpine Outfitters moved up from fifth to fourth place this year.</p>
-                    <button className="text-button" onClick={() => setShowSql(true)} type="button">Show SQL</button>
-                  </div>
-                </div>
+                )}
               </div>
 
               <div className="composer-area">
                 <div className="suggestion-list">
                   {suggestions.map((suggestion) => (
-                    <button key={suggestion} onClick={() => void submitQuestion(suggestion)} type="button">{suggestion}</button>
+                    <button disabled={!selectedProjectId || queryBusy} key={suggestion} onClick={() => void submitQuestion(suggestion)} type="button">{suggestion}</button>
                   ))}
                 </div>
                 <form className="question-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion() }}>
@@ -633,7 +662,7 @@ function App() {
                     rows={2}
                     value={query}
                   />
-                  <button className="send-button" disabled={!query.trim()} type="submit">Send</button>
+                  <button className="send-button" disabled={!query.trim() || queryBusy || !selectedProjectId} type="submit">{queryBusy ? '…' : 'Send'}</button>
                 </form>
                 <div className="composer-footer">
                   <span>Enter to send · Shift+Enter for a new line · Esc to stop</span>
@@ -655,7 +684,7 @@ function App() {
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
             <span className="local-status"><i />Local only · PostgreSQL</span>
           </header>
-          <SetupWizard
+          {activePage === 'Setup' ? <SetupWizard
             apiRequest={apiRequest}
             draft={connectionDraft}
             existingProject={profile.projects[0]}
@@ -667,7 +696,10 @@ function App() {
                 })
               }
             }}
-          />
+          /> : <ModelCanvas
+            apiRequest={apiRequest}
+            projectId={profile.projects[0]?.id}
+          />}
           </main>
         ) : (
           <main className="placeholder-main">
@@ -683,6 +715,22 @@ function App() {
           </section>
           </main>
         )}
+        <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+          {visibleNavigation
+            .filter(({ page }) => mobileNavigation.includes(page))
+            .map(({ page }) => (
+              <button
+                aria-current={activePage === page ? 'page' : undefined}
+                className={`mobile-bottom-item${activePage === page ? ' active' : ''}`}
+                key={page}
+                onClick={() => setActivePage(page)}
+                type="button"
+              >
+                <NavGlyph page={page} />
+                <span>{page}</span>
+              </button>
+            ))}
+        </nav>
       </div>
     </div>
   )
@@ -691,6 +739,7 @@ function App() {
 function NavGlyph({ page }: { page: Page }) {
   const glyphs: Record<Page, string> = {
     Home: '⌂',
+    'Shared with me': '⇄',
     Dashboards: '▦',
     'Scheduled questions': '◷',
     Setup: '⚙',

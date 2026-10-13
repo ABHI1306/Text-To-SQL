@@ -6,7 +6,7 @@
     "valid_responses": 9,
     "required_tables_present": 10,
     "schema_validity_rate": 0.9,
-    "wall_time_seconds": 80.472,
+    "wall_time_seconds": 82.855,
     "results": [
       {
         "question": "How many orders are there?",
@@ -19,9 +19,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT COUNT(*) FROM ecommerce.orders",
-        "generation_duration_ns": 14221903794,
+        "generation_duration_ns": 16736874379,
         "eval_count": 11,
-        "eval_duration_ns": 1976087000
+        "eval_duration_ns": 2002776000
       },
       {
         "question": "Count customers by region.",
@@ -34,9 +34,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT e.customers.region, COUNT(*) FROM ecommerce.customers e GROUP BY e.region",
-        "generation_duration_ns": 5018044564,
+        "generation_duration_ns": 5077858320,
         "eval_count": 23,
-        "eval_duration_ns": 4492628000
+        "eval_duration_ns": 4404908000
       },
       {
         "question": "Show total units sold per product.",
@@ -51,9 +51,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT p.product_id, SUM(oi.quantity) AS total_units_sold FROM ecommerce.products p JOIN ecommerce.order_items oi ON p.product_id = oi.product_id GROUP BY p.product_id",
-        "generation_duration_ns": 9031936264,
+        "generation_duration_ns": 9072644988,
         "eval_count": 42,
-        "eval_duration_ns": 8281700000
+        "eval_duration_ns": 8400929000
       },
       {
         "question": "Show payment totals by method.",
@@ -66,9 +66,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT p.method, SUM(p.amount) AS total FROM ecommerce.payments p GROUP BY p.method",
-        "generation_duration_ns": 5574579699,
+        "generation_duration_ns": 5481546817,
         "eval_count": 25,
-        "eval_duration_ns": 4859649000
+        "eval_duration_ns": 4806845000
       },
       {
         "question": "Find each customer's order count.",
@@ -83,9 +83,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT c.customer_id, COUNT(o.order_id) AS order_count FROM ecommerce.customers c LEFT JOIN ecommerce.orders o ON c.customer_id = o.customer_id GROUP BY c.customer_id",
-        "generation_duration_ns": 8903947208,
+        "generation_duration_ns": 8955867178,
         "eval_count": 41,
-        "eval_duration_ns": 8054877000
+        "eval_duration_ns": 8278771000
       },
       {
         "question": "Show average order value by region.",
@@ -100,9 +100,9 @@
         "structured_and_schema_valid": false,
         "required_tables_present": true,
         "response": "SELECT eecommerce.orders.region, AVG(eecommerce.payments.amount) AS avg_order_value FROM eecommerce.orders JOIN eecommerce.payments ON eecommerce.orders.order_id = eecommerce.payments.order_id GROUP BY eecommerce.orders.region",
-        "generation_duration_ns": 12297241638,
+        "generation_duration_ns": 12898131030,
         "eval_count": 58,
-        "eval_duration_ns": 11553408000
+        "eval_duration_ns": 12222036000
       },
       {
         "question": "List products with their category names.",
@@ -116,9 +116,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT p.name, c.name AS category_name FROM ecommerce.products p JOIN ecommerce.categories c ON p.category_id = c.category_id",
-        "generation_duration_ns": 6853429096,
+        "generation_duration_ns": 6660561430,
         "eval_count": 31,
-        "eval_duration_ns": 6117055000
+        "eval_duration_ns": 5988443000
       },
       {
         "question": "Show the five most recent orders.",
@@ -131,9 +131,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT * FROM ecommerce.orders WHERE status = 'active' ORDER BY ordered_at DESC LIMIT 5",
-        "generation_duration_ns": 5658560394,
+        "generation_duration_ns": 5423040223,
         "eval_count": 25,
-        "eval_duration_ns": 4854925000
+        "eval_duration_ns": 4704886000
       },
       {
         "question": "Count orders by status.",
@@ -146,9 +146,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT status, COUNT(*) FROM ecommerce.orders GROUP BY status",
-        "generation_duration_ns": 3709881132,
+        "generation_duration_ns": 3653237241,
         "eval_count": 16,
-        "eval_duration_ns": 2988989000
+        "eval_duration_ns": 2980184000
       },
       {
         "question": "Show revenue by product.",
@@ -163,9 +163,9 @@
         "structured_and_schema_valid": true,
         "required_tables_present": true,
         "response": "SELECT p.name, SUM(oi.quantity * oi.unit_price) AS revenue FROM ecommerce.products p JOIN ecommerce.order_items oi ON p.product_id = oi.product_id GROUP BY p.name",
-        "generation_duration_ns": 9163314924,
+        "generation_duration_ns": 8850007312,
         "eval_count": 42,
-        "eval_duration_ns": 8451160000
+        "eval_duration_ns": 8172963000
       }
     ],
     "limitations": [

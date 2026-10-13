@@ -1,0 +1,458 @@
+[
+  {
+    "model": "llama3:latest",
+    "digest": "365c0bd3c000a25d28ddbf732fe1c6add414de7275464c4e4d1c3b5fcb5d8ad1",
+    "cases": 40,
+    "valid": 39,
+    "expected_models_present": 30,
+    "valid_rate": 0.975,
+    "model_recall_rate": 0.75,
+    "by_difficulty": {
+      "easy": {
+        "n": 7,
+        "valid": 7,
+        "expected_models_present": 7
+      },
+      "hard": {
+        "n": 8,
+        "valid": 8,
+        "expected_models_present": 5
+      },
+      "medium": {
+        "n": 25,
+        "valid": 24,
+        "expected_models_present": 18
+      }
+    },
+    "latency_seconds": {
+      "p50": 12.59,
+      "p95": 27.01
+    },
+    "tokens_per_second_median": 4.71,
+    "wall_time_seconds": 566.2,
+    "results": [
+      {
+        "id": "ecom-01",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "order_items"
+        ],
+        "seconds": 32.71,
+        "tokens_per_second": 5.15,
+        "sql": "SELECT c.customer_id, SUM(o.total_amount) AS total_revenue FROM ecommerce.customers c JOIN ecommerce.orders o ON c.customer_id = o.customer_id GROUP BY c.customer_id ORDER BY total_revenue DESC LIMIT 5;"
+      },
+      {
+        "id": "ecom-02",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 11.55,
+        "tokens_per_second": 5.08,
+        "sql": "SELECT EXTRACT(MONTH FROM ordered_at) AS month, COUNT(*) AS orders_count FROM ecommerce.orders WHERE EXTRACT(YEAR FROM ordered_at) = EXTRACT(YEAR FROM CURRENT_DATE) GROUP BY month ORDER BY month;"
+      },
+      {
+        "id": "ecom-03",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 17.94,
+        "tokens_per_second": 4.98,
+        "sql": "SELECT e.region, AVG(eo.total_amount) AS avg_order_value FROM (SELECT o.customer_id, SUM(p.unit_price * oi.quantity) AS total_amount FROM ecommerce.orders o JOIN ecommerce.order_items oi ON o.order_id = oi.order_id JOIN ecommerce.products p ON oi.product_id = p.product_id GROUP BY o.customer_id, o.region) e GROUP BY e.region;"
+      },
+      {
+        "id": "ecom-04",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 11.73,
+        "tokens_per_second": 4.4,
+        "sql": "SELECT c.customer_id, c.first_name, c.last_name, c.email FROM ecommerce.customers c WHERE NOT EXISTS (SELECT 1 FROM ecommerce.orders o WHERE o.customer_id = c.customer_id)"
+      },
+      {
+        "id": "ecom-05",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "orders"
+        ],
+        "seconds": 12.21,
+        "tokens_per_second": 4.56,
+        "sql": "SELECT p.product_id, SUM(oi.quantity) AS total_quantity FROM ecommerce.products p JOIN ecommerce.order_items oi ON p.product_id = oi.product_id GROUP BY p.product_id ORDER BY total_quantity DESC;"
+      },
+      {
+        "id": "ecom-06",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 5.95,
+        "tokens_per_second": 4.88,
+        "sql": "SELECT o.status, COUNT(*) AS order_count FROM ecommerce.orders o GROUP BY o.status;"
+      },
+      {
+        "id": "ecom-07",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 17.48,
+        "tokens_per_second": 4.09,
+        "sql": "SELECT e.customers.customer_id, e.customers.first_name, e.customers.last_name, e.addresses.city, e.addresses.country FROM ecommerce.customers AS e JOIN ecommerce.addresses AS a ON e.customers.customer_id = a.customer_id WHERE a.city IS NOT NULL AND a.country IS NOT NULL"
+      },
+      {
+        "id": "ecom-08",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 9.74,
+        "tokens_per_second": 5.0,
+        "sql": "SELECT c.name, COUNT(p.product_id) AS num_products FROM ecommerce.categories c JOIN ecommerce.products p ON c.category_id = p.category_id GROUP BY c.name ORDER BY num_products DESC;"
+      },
+      {
+        "id": "ecom-09",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "categories"
+        ],
+        "seconds": 16.33,
+        "tokens_per_second": 4.85,
+        "sql": "SELECT c.name AS category_name, SUM(p.unit_price * oi.quantity) AS revenue FROM ecommerce.products p JOIN ecommerce.order_items oi ON p.product_id = oi.product_id JOIN ecommerce.orders o ON oi.order_id = o.order_id JOIN ecommerce.customers c ON o.customer_id = c.customer_id GROUP BY c.name ORDER BY revenue DESC;"
+      },
+      {
+        "id": "ecom-10",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "products"
+        ],
+        "seconds": 6.63,
+        "tokens_per_second": 5.04,
+        "sql": "SELECT e.region, SUM(i.quantity_on_hand) AS total_quantity FROM ecommerce.inventory i GROUP BY e.region"
+      },
+      {
+        "id": "ecom-11",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 9.73,
+        "tokens_per_second": 4.76,
+        "sql": "SELECT p.product_id FROM ecommerce.products p JOIN ecommerce.inventory i ON p.product_id = i.product_id WHERE i.quantity_on_hand <= (p.unit_price * 3)"
+      },
+      {
+        "id": "ecom-12",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "orders"
+        ],
+        "seconds": 9.82,
+        "tokens_per_second": 4.97,
+        "sql": "SELECT EXTRACT(MONTH FROM paid_at) AS month, method, SUM(amount) AS total_amount FROM ecommerce.payments GROUP BY month, method ORDER BY month, method;"
+      },
+      {
+        "id": "ecom-13",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 12.53,
+        "tokens_per_second": 4.55,
+        "sql": "SELECT s.shipment_id, o.ordered_at, s.shipped_at, s.delivered_at FROM ecommerce.orders o JOIN ecommerce.shipments s ON o.order_id = s.order_id WHERE s.delivered_at > s.shipped_at"
+      },
+      {
+        "id": "ecom-14",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 9.93,
+        "tokens_per_second": 4.87,
+        "sql": "SELECT p.product_id, AVG(r.rating) AS avg_rating FROM ecommerce.products p LEFT JOIN ecommerce.reviews r ON p.product_id = r.product_id GROUP BY p.product_id;"
+      },
+      {
+        "id": "ecom-15",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 12.78,
+        "tokens_per_second": 4.44,
+        "sql": "SELECT c.code, c.discount_percent FROM ecommerce.coupons c WHERE NOT EXISTS (SELECT 1 FROM ecommerce.order_coupons oc WHERE oc.coupon_id = c.coupon_id) AND c.ends_at > CURRENT_DATE"
+      },
+      {
+        "id": "ecom-16",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "orders"
+        ],
+        "seconds": 16.58,
+        "tokens_per_second": 3.34,
+        "sql": "SELECT c.code, COUNT(o.order_id) AS order_count FROM ecommerce.coupons c LEFT JOIN ecommerce.order_coupons oc ON c.coupon_id = oc.coupon_id GROUP BY c.code;"
+      },
+      {
+        "id": "ecom-17",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 14.99,
+        "tokens_per_second": 4.38,
+        "sql": "SELECT c.customer_id, COUNT(o.order_id) AS num_returned_orders FROM ecommerce.customers c LEFT JOIN ecommerce.orders o ON c.customer_id = o.customer_id WHERE o.status = 'returned' GROUP BY c.customer_id ORDER BY num_returned_orders DESC;"
+      },
+      {
+        "id": "ecom-18",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 14.5,
+        "tokens_per_second": 4.79,
+        "sql": "SELECT e.region, COUNT(o.order_id) AS total_orders, SUM(CASE WHEN o.status = 'active' THEN 1 ELSE 0 END) AS active_orders FROM ecommerce.orders o JOIN ecommerce.customers c ON o.customer_id = c.customer_id GROUP BY e.region;"
+      },
+      {
+        "id": "ecom-19",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 10.33,
+        "tokens_per_second": 4.89,
+        "sql": "SELECT SUM(e.quantity_on_hand * p.unit_price) AS total_value FROM ecommerce.inventory e JOIN ecommerce.products p ON e.product_id = p.product_id WHERE e.quantity_on_hand > 0"
+      },
+      {
+        "id": "ecom-20",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 8.19,
+        "tokens_per_second": 4.89,
+        "sql": "SELECT p.* FROM ecommerce.products p WHERE NOT EXISTS (SELECT 1 FROM ecommerce.order_items oi WHERE oi.product_id = p.product_id)"
+      },
+      {
+        "id": "ecom-21",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 27.01,
+        "tokens_per_second": 3.41,
+        "sql": "SELECT c.customer_id, c.first_name, c.last_name, COUNT(o.order_id) AS num_orders FROM ecommerce.customers c JOIN ecommerce.orders o ON c.customer_id = o.customer_id WHERE EXTRACT(quarter FROM o.ordered_at) = EXTRACT(quarter FROM CURRENT_DATE) GROUP BY c.customer_id, c.first_name, c.last_name ORDER BY num_orders DESC LIMIT 10;"
+      },
+      {
+        "id": "ecom-22",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "orders"
+        ],
+        "seconds": 17.48,
+        "tokens_per_second": 4.64,
+        "sql": "SELECT EXTRACT(MONTH FROM p.paid_at) AS month, SUM(p.amount - oi.unit_price * oi.quantity) AS refund_amount FROM ecommerce.payments p JOIN ecommerce.order_items oi ON p.order_id = oi.order_id WHERE p.status = 'refunded' GROUP BY EXTRACT(MONTH FROM p.paid_at)"
+      },
+      {
+        "id": "ecom-23",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 12.42,
+        "tokens_per_second": 4.78,
+        "sql": "SELECT e.region, COUNT(*) AS num_pending_shipments FROM ecommerce.shipments s JOIN ecommerce.orders o ON s.order_id = o.order_id WHERE s.delivered_at IS NULL GROUP BY e.region ORDER BY num_pending_shipments DESC;"
+      },
+      {
+        "id": "ecom-24",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 11.95,
+        "tokens_per_second": 4.72,
+        "sql": "SELECT p.product_id, AVG(r.rating) AS avg_rating FROM ecommerce.products p LEFT JOIN ecommerce.reviews r ON p.product_id = r.product_id GROUP BY p.product_id HAVING AVG(r.rating) < 3"
+      },
+      {
+        "id": "hr-01",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 10.59,
+        "tokens_per_second": 4.82,
+        "sql": "SELECT h.department_id, COUNT(h.employee_id) AS num_employees FROM human_resources.employees e JOIN human_resources.departments h ON e.department_id = h.department_id GROUP BY h.department_id;"
+      },
+      {
+        "id": "hr-02",
+        "difficulty": "easy",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 9.83,
+        "tokens_per_second": 4.06,
+        "sql": "SELECT e.employee_id FROM human_resources.employees e WHERE e.hire_date > '2023-01-01'::date"
+      },
+      {
+        "id": "hr-03",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 17.67,
+        "tokens_per_second": 4.18,
+        "sql": "SELECT h.department_id, AVG(sh.annual_salary) AS current_annual_salary FROM human_resources.salary_history sh JOIN human_resources.employees e ON sh.employee_id = e.employee_id JOIN human_resources.departments d ON e.department_id = d.department_id WHERE sh.valid_from <= CURRENT_DATE GROUP BY h.department_id"
+      },
+      {
+        "id": "hr-04",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 13.41,
+        "tokens_per_second": 4.55,
+        "sql": "SELECT h.department_name, COUNT(h.employee_id) AS employee_count, e.region FROM human_resources.departments d JOIN human_resources.employees e ON d.department_id = e.department_id GROUP BY h.department_name, e.region ORDER BY e.region;"
+      },
+      {
+        "id": "hr-05",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 20.77,
+        "tokens_per_second": 4.36,
+        "sql": "SELECT e1.department_id, e2.first_name || ' ' || e2.last_name AS manager_name, e3.first_name || ' ' || e3.last_name AS reported_to FROM human_resources.employees e1 JOIN human_resources.employees e2 ON e1.manager_id = e2.employee_id JOIN human_resources.employees e3 ON e1.employee_id = e3.employee_id"
+      },
+      {
+        "id": "hr-06",
+        "difficulty": "medium",
+        "valid": false,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 14.15,
+        "tokens_per_second": 4.08,
+        "sql": "SELECT EXTRACT(MONTH FROM lr.ends_on) AS month, COUNT(*) AS count FROM ecommerce.leave_requests lr WHERE lr.status = 'APPROVED' GROUP BY EXTRACT(MONTH FROM lr.ends_on)"
+      },
+      {
+        "id": "hr-07",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 19.21,
+        "tokens_per_second": 4.62,
+        "sql": "SELECT e1.employee_id FROM human_resources.employees e1 JOIN human_resources.leave_requests lr1 ON e1.employee_id = lr1.employee_id WHERE EXISTS (SELECT 1 FROM human_resources.leave_requests lr2 WHERE lr2.employee_id = e1.employee_id AND lr1.starts_on < lr2.ends_on AND lr1.ends_on > lr2.starts_on)"
+      },
+      {
+        "id": "hr-08",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "departments",
+          "employees"
+        ],
+        "seconds": 9.42,
+        "tokens_per_second": 4.79,
+        "sql": "SELECT h.department_id, AVG(h.rating) AS avg_rating FROM human_resources.performance_reviews h GROUP BY h.department_id, EXTRACT(YEAR FROM h.review_year)"
+      },
+      {
+        "id": "hr-09",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 10.54,
+        "tokens_per_second": 3.8,
+        "sql": "SELECT d.department_id FROM human_resources.departments d LEFT JOIN human_resources.employees e ON d.department_id = e.department_id WHERE e.employee_id IS NULL"
+      },
+      {
+        "id": "hr-10",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 31.71,
+        "tokens_per_second": 4.32,
+        "sql": "SELECT hr.employees.employee_id, hr.employees.first_name, hr.employees.last_name, sh.valid_from, sh.annual_salary, shh.valid_from AS prev_valid_from, shh.annual_salary AS prev_annual_salary FROM human_resources.employees hr JOIN human_resources.salary_history sh ON hr.employee_id = sh.employee_id JOIN human_resources.salary_history shh ON hr.employee_id = shh.employee_id AND sh.valid_from = DATE_TRUNC('month', shh.valid_from) + INTERVAL '1 month' WHERE sh.valid_from > shh.valid_from AND sh.annual_salary > shh.annual_salary"
+      },
+      {
+        "id": "hr-11",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 12.65,
+        "tokens_per_second": 4.87,
+        "sql": "SELECT h.department_id, AVG(DATE_PART('year', NOW() - h.hire_date)) AS avg_tenure FROM human_resources.employees e JOIN human_resources.departments h ON e.department_id = h.department_id GROUP BY h.department_id"
+      },
+      {
+        "id": "hr-12",
+        "difficulty": "hard",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 13.87,
+        "tokens_per_second": 4.81,
+        "sql": "SELECT e.employee_id FROM human_resources.employees e JOIN human_resources.performance_reviews pr ON e.employee_id = pr.employee_id WHERE pr.review_year = (SELECT MAX(review_year) FROM human_resources.performance_reviews WHERE employee_id = e.employee_id) AND pr.rating < 3"
+      },
+      {
+        "id": "hr-13",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "employees"
+        ],
+        "seconds": 12.7,
+        "tokens_per_second": 4.71,
+        "sql": "SELECT d.name AS department_name, COUNT(l.status) AS pending_leave_requests FROM human_resources.departments d LEFT JOIN human_resources.leave_requests l ON d.department_id = l.employee_id WHERE l.status = 'pending' GROUP BY d.name"
+      },
+      {
+        "id": "hr-14",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": false,
+        "missing_models": [
+          "departments",
+          "employees"
+        ],
+        "seconds": 9.66,
+        "tokens_per_second": 4.89,
+        "sql": "SELECT h.department_id, MIN(h.annual_salary) AS min_salary, MAX(h.annual_salary) AS max_salary FROM human_resources.salary_history h GROUP BY h.department_id;"
+      },
+      {
+        "id": "hr-15",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 10.41,
+        "tokens_per_second": 3.99,
+        "sql": "SELECT e.employee_id FROM human_resources.employees e LEFT JOIN human_resources.performance_reviews pr ON e.employee_id = pr.employee_id WHERE pr.review_id IS NULL"
+      },
+      {
+        "id": "hr-16",
+        "difficulty": "medium",
+        "valid": true,
+        "expected_models_present": true,
+        "missing_models": [],
+        "seconds": 19.0,
+        "tokens_per_second": 4.45,
+        "sql": "SELECT h.department_id, EXTRACT(YEAR FROM h.hire_date) AS hire_year, COUNT(*) AS hires_per_year\nFROM human_resources.employees e\nJOIN human_resources.departments d ON e.department_id = d.department_id\nWHERE e.manager_id IS NULL\nGROUP BY h.department_id, hire_year\nORDER BY department_id, hire_year;"
+      }
+    ]
+  }
+]

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import TypeAlias, cast
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.auth.models import AuthContext, AuthUser
+from app.core.types import JsonValue
 
 Row: TypeAlias = dict[str, object]
 
@@ -62,14 +64,36 @@ class PostgresMetadataRepository:
                 "SELECT project_id FROM project_members WHERE user_id = %s::uuid",
                 (user_id,),
             )
-            project_ids = frozenset(str(item["project_id"]) for item in cursor.fetchall())
+            project_ids = {str(item["project_id"]) for item in cursor.fetchall()}
+            cursor.execute(
+                """
+                SELECT project_role_members.project_id
+                FROM project_role_members
+                JOIN users ON users.role_id = project_role_members.role_id
+                WHERE users.id = %s::uuid
+                """,
+                (user_id,),
+            )
+            project_ids.update(str(item["project_id"]) for item in cursor.fetchall())
+            if row["role_name"] == "DBA":
+                cursor.execute("SELECT id FROM projects")
+                project_ids.update(str(item["id"]) for item in cursor.fetchall())
+            cursor.execute(
+                "SELECT key, value FROM user_attributes WHERE user_id = %s::uuid",
+                (user_id,),
+            )
+            attributes = {
+                str(item["key"]): cast(JsonValue, item["value"])
+                for item in cursor.fetchall()
+            }
         return AuthContext(
             user_id=str(row["id"]),
             username=str(row["username"]),
             role_name=str(row["role_name"]),
             capabilities=capabilities,
-            project_ids=project_ids,
+            project_ids=frozenset(project_ids),
             must_change_password=bool(row["must_change_password"]),
+            attributes=attributes,
         )
 
     def record_login_failure(
@@ -273,7 +297,14 @@ class PostgresMetadataRepository:
                 raise ValueError(f"User {username!r} already exists")
             return str(row["id"])
 
-    def create_local_user(self, username: str, role_name: str, password_hash: str) -> str:
+    def create_local_user(
+        self,
+        username: str,
+        role_name: str,
+        password_hash: str,
+        *,
+        actor_id: str | None = None,
+    ) -> str:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM roles WHERE name = %s", (role_name,))
             role = cursor.fetchone()
@@ -295,9 +326,9 @@ class PostgresMetadataRepository:
             cursor.execute(
                 """
                 INSERT INTO audit_events (actor_id, action, resource_type, resource_id, details)
-                VALUES (NULL, 'user_created', 'user', %s, %s)
+                VALUES (%s::uuid, 'user_created', 'user', %s, %s)
                 """,
-                (username.casefold(), Jsonb({"role": role_name})),
+                (actor_id, username.casefold(), Jsonb({"role": role_name})),
             )
             return user_id
 
@@ -426,16 +457,27 @@ class PostgresMetadataRepository:
                 raise KeyError(f"Project {project_id} does not exist")
         return version
 
-    def get_mdl(self, project_id: str) -> dict[str, object] | None:
+    def get_mdl(
+        self, project_id: str, version: int | None = None
+    ) -> dict[str, object] | None:
         with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT version_number, document FROM mdl_versions
-                WHERE project_id = %s::uuid
-                ORDER BY version_number DESC LIMIT 1
-                """,
-                (project_id,),
-            )
+            if version is None:
+                cursor.execute(
+                    """
+                    SELECT version_number, document FROM mdl_versions
+                    WHERE project_id = %s::uuid
+                    ORDER BY version_number DESC LIMIT 1
+                    """,
+                    (project_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT version_number, document FROM mdl_versions
+                    WHERE project_id = %s::uuid AND version_number = %s
+                    """,
+                    (project_id, version),
+                )
             row = cursor.fetchone()
         if row is None:
             return None
@@ -446,20 +488,358 @@ class PostgresMetadataRepository:
             "revision": cast(int, row["version_number"]),
         }
 
+    def set_project_sample(self, project_id: str) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE projects SET is_sample = TRUE WHERE id = %s::uuid",
+                (project_id,),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Project {project_id} does not exist")
+
+    def get_active_mdl_version(self, project_id: str) -> int | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT version_number FROM mdl_versions
+                WHERE project_id = %s::uuid AND status = 'active'
+                """,
+                (project_id,),
+            )
+            row = cursor.fetchone()
+        return int(cast(int, row["version_number"])) if row else None
+
+    def activate_mdl_version(
+        self,
+        project_id: str,
+        version: int,
+        *,
+        deployed_by: str,
+        expected_previous_version: int | None,
+    ) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM projects WHERE id = %s::uuid FOR UPDATE",
+                (project_id,),
+            )
+            if cursor.fetchone() is None:
+                raise KeyError(f"Project {project_id} does not exist")
+            cursor.execute(
+                """
+                SELECT version_number FROM mdl_versions
+                WHERE project_id = %s::uuid AND status = 'active'
+                FOR UPDATE
+                """,
+                (project_id,),
+            )
+            active_row = cursor.fetchone()
+            active_version = (
+                int(cast(int, active_row["version_number"])) if active_row else None
+            )
+            if active_version != expected_previous_version:
+                raise RuntimeError(
+                    "Active MDL changed during deployment; retry with the latest revision"
+                )
+            cursor.execute(
+                """
+                SELECT id FROM mdl_versions
+                WHERE project_id = %s::uuid AND version_number = %s
+                FOR UPDATE
+                """,
+                (project_id, version),
+            )
+            mdl_version = cursor.fetchone()
+            if mdl_version is None:
+                raise KeyError(f"MDL revision {version} does not exist")
+            cursor.execute(
+                """
+                UPDATE mdl_versions SET status = 'pending'
+                WHERE project_id = %s::uuid AND status = 'active'
+                """,
+                (project_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE mdl_versions
+                SET status = 'active', deployed_at = now(), deployed_by = %s::uuid
+                WHERE id = %s::uuid
+                """,
+                (deployed_by, mdl_version["id"]),
+            )
+            cursor.execute(
+                """
+                INSERT INTO audit_events
+                    (actor_id, action, resource_type, resource_id, details)
+                VALUES (%s::uuid, 'mdl_deployed', 'project', %s,
+                        jsonb_build_object('revision', %s))
+                """,
+                (deployed_by, project_id, version),
+            )
+
+    def restore_active_mdl_version(
+        self,
+        project_id: str,
+        new_version: int,
+        previous_version: int,
+    ) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM projects WHERE id = %s::uuid FOR UPDATE",
+                (project_id,),
+            )
+            if cursor.fetchone() is None:
+                raise KeyError(f"Project {project_id} does not exist")
+            cursor.execute(
+                """
+                UPDATE mdl_versions SET status = 'pending'
+                WHERE project_id = %s::uuid AND version_number = %s AND status = 'active'
+                """,
+                (project_id, new_version),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    "Active MDL changed before deployment rollback could be applied"
+                )
+            cursor.execute(
+                """
+                UPDATE mdl_versions SET status = 'active'
+                WHERE project_id = %s::uuid AND version_number = %s
+                """,
+                (project_id, previous_version),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"Previous active MDL revision {previous_version} is missing"
+                )
+
     def list_projects(self, user_id: str) -> list[dict[str, object]]:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT projects.id, projects.name, projects.host, projects.database_name,
                        projects.setup_step
-                FROM projects JOIN project_members
-                  ON project_members.project_id = projects.id
-                WHERE project_members.user_id = %s::uuid
+                FROM projects
+                WHERE EXISTS (
+                    SELECT 1 FROM users JOIN roles ON roles.id = users.role_id
+                    WHERE users.id = %s::uuid AND roles.name = 'DBA'
+                ) OR EXISTS (
+                    SELECT 1 FROM project_members
+                    WHERE project_members.project_id = projects.id
+                      AND project_members.user_id = %s::uuid
+                ) OR EXISTS (
+                    SELECT 1
+                    FROM project_role_members
+                    JOIN users ON users.role_id = project_role_members.role_id
+                    WHERE project_role_members.project_id = projects.id
+                      AND users.id = %s::uuid
+                )
                 ORDER BY projects.created_at
                 """,
-                (user_id,),
+                (user_id, user_id, user_id),
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def list_roles(self) -> list[dict[str, object]]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT roles.id, roles.name, roles.description, roles.is_system,
+                       COALESCE(array_agg(role_capabilities.capability)
+                           FILTER (WHERE role_capabilities.capability IS NOT NULL), '{}')
+                           AS capabilities
+                FROM roles LEFT JOIN role_capabilities ON role_capabilities.role_id = roles.id
+                GROUP BY roles.id ORDER BY roles.is_system DESC, roles.name
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_role_capabilities(self, role_name: str) -> frozenset[str] | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT role_capabilities.capability
+                FROM roles
+                LEFT JOIN role_capabilities ON role_capabilities.role_id = roles.id
+                WHERE roles.name = %s
+                """,
+                (role_name,),
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                return None
+            return frozenset(
+                str(row["capability"])
+                for row in rows
+                if row["capability"] is not None
+            )
+
+    def create_role(
+        self, name: str, description: str, capabilities: list[str]
+    ) -> str:
+        role_id = str(uuid4())
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO roles (id, name, description, is_system) "
+                "VALUES (%s::uuid, %s, %s, FALSE)",
+                (role_id, name, description),
+            )
+            cursor.executemany(
+                "INSERT INTO role_capabilities (role_id, capability) "
+                "VALUES (%s::uuid, %s)",
+                [(role_id, capability) for capability in capabilities],
+            )
+        return role_id
+
+    def update_role(
+        self,
+        role_id: str,
+        *,
+        name: str,
+        description: str,
+        capabilities: list[str],
+    ) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE roles SET name = %s, description = %s "
+                "WHERE id = %s::uuid AND is_system = FALSE",
+                (name, description, role_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("Custom role does not exist")
+            cursor.execute("DELETE FROM role_capabilities WHERE role_id = %s::uuid", (role_id,))
+            cursor.executemany(
+                "INSERT INTO role_capabilities (role_id, capability) "
+                "VALUES (%s::uuid, %s)",
+                [(role_id, capability) for capability in capabilities],
+            )
+
+    def delete_role(self, role_id: str) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT roles.is_system,
+                       EXISTS (SELECT 1 FROM users WHERE users.role_id = roles.id)
+                       OR EXISTS (
+                           SELECT 1 FROM project_role_members
+                           WHERE project_role_members.role_id = roles.id
+                       ) AS in_use
+                FROM roles WHERE id = %s::uuid FOR UPDATE
+                """,
+                (role_id,),
+            )
+            row = cursor.fetchone()
+            if row is None or bool(row["is_system"]):
+                raise KeyError("Custom role does not exist")
+            if bool(row["in_use"]):
+                raise ValueError("Role is assigned to users or projects")
+            cursor.execute("DELETE FROM roles WHERE id = %s::uuid", (role_id,))
+
+    def list_users(self) -> list[dict[str, object]]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT users.id, users.username, users.status, users.auth_source,
+                       roles.name AS role
+                FROM users JOIN roles ON roles.id = users.role_id
+                ORDER BY users.username
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def set_user_role(self, user_id: str, role_name: str) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE users SET role_id = (SELECT id FROM roles WHERE name = %s)
+                WHERE id = %s::uuid AND EXISTS (SELECT 1 FROM roles WHERE name = %s)
+                """,
+                (role_name, user_id, role_name),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("User or role does not exist")
+
+    def replace_user_project_access(self, user_id: str, project_ids: list[str]) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE id = %s::uuid", (user_id,))
+            if cursor.fetchone() is None:
+                raise KeyError("User does not exist")
+            self._validate_project_ids(cursor, project_ids)
+            cursor.execute("DELETE FROM project_members WHERE user_id = %s::uuid", (user_id,))
+            cursor.executemany(
+                "INSERT INTO project_members (project_id, user_id) "
+                "VALUES (%s::uuid, %s::uuid)",
+                [(project_id, user_id) for project_id in project_ids],
+            )
+
+    def replace_role_project_access(self, role_id: str, project_ids: list[str]) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM roles WHERE id = %s::uuid", (role_id,))
+            if cursor.fetchone() is None:
+                raise KeyError("Role does not exist")
+            self._validate_project_ids(cursor, project_ids)
+            cursor.execute(
+                "DELETE FROM project_role_members WHERE role_id = %s::uuid", (role_id,)
+            )
+            cursor.executemany(
+                "INSERT INTO project_role_members (project_id, role_id) "
+                "VALUES (%s::uuid, %s::uuid)",
+                [(project_id, role_id) for project_id in project_ids],
+            )
+
+    def get_user_project_access(self, user_id: str) -> list[str]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT project_id FROM project_members WHERE user_id = %s::uuid",
+                (user_id,),
+            )
+            return [str(row["project_id"]) for row in cursor.fetchall()]
+
+    def get_role_project_access(self, role_id: str) -> list[str]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT project_id FROM project_role_members WHERE role_id = %s::uuid",
+                (role_id,),
+            )
+            return [str(row["project_id"]) for row in cursor.fetchall()]
+
+    def get_user_attributes(self, user_id: str) -> dict[str, object]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT key, value FROM user_attributes WHERE user_id = %s::uuid",
+                (user_id,),
+            )
+            return {str(row["key"]): row["value"] for row in cursor.fetchall()}
+
+    def replace_user_attributes(self, user_id: str, attributes: dict[str, object]) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE id = %s::uuid", (user_id,))
+            if cursor.fetchone() is None:
+                raise KeyError("User does not exist")
+            cursor.execute("DELETE FROM user_attributes WHERE user_id = %s::uuid", (user_id,))
+            cursor.executemany(
+                """
+                INSERT INTO user_attributes (user_id, key, value, source)
+                VALUES (%s::uuid, %s, %s, 'manual')
+                """,
+                [
+                    (user_id, key, Jsonb(value))
+                    for key, value in attributes.items()
+                ],
+            )
+
+    @staticmethod
+    def _validate_project_ids(cursor: psycopg.Cursor[Row], project_ids: list[str]) -> None:
+        if len(set(project_ids)) != len(project_ids):
+            raise ValueError("Project IDs must be unique")
+        if not project_ids:
+            return
+        cursor.execute(
+            "SELECT id FROM projects WHERE id = ANY(%s::uuid[])",
+            (project_ids,),
+        )
+        found = {str(row["id"]) for row in cursor.fetchall()}
+        if found != set(project_ids):
+            raise KeyError("One or more projects do not exist")
 
     def audit_authentication(self, action: str, user_id: str, details: dict[str, object]) -> None:
         self.append_auth_audit(user_id, action, user_id, details)

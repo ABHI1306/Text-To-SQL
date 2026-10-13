@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.core.types import JsonValue
+
 
 @dataclass(frozen=True)
 class AuthUser:
@@ -22,6 +24,7 @@ class AuthContext:
     project_ids: frozenset[str]
     must_change_password: bool
     session_id: str | None = None
+    attributes: dict[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)

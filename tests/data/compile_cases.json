@@ -1,0 +1,490 @@
+{
+  "version": "v0",
+  "status": "draft_pending_human_review",
+  "dialect": "postgresql",
+  "source_note": "Day 3 starter set. The compiler (Day 4) does not exist yet; 'expect' describes compiled structure, not exact SQL. Model names come from the deployed E-commerce sample MDL. v1 (40 cases, Day 4) extends this file after DBA review.",
+  "model_overlay": {
+    "calculated_fields": [
+      {
+        "model": "order_items",
+        "name": "line_total",
+        "expression": "quantity * unit_price"
+      }
+    ],
+    "metrics": [
+      {
+        "name": "monthly_revenue",
+        "base_model": "order_items",
+        "dimensions": [
+          {
+            "name": "order_month",
+            "expression": "date_trunc('month', ordered_at)",
+            "via": "orders"
+          }
+        ],
+        "measures": [
+          {
+            "name": "revenue",
+            "expression": "sum(quantity * unit_price)"
+          }
+        ]
+      }
+    ],
+    "row_policies": [
+      {
+        "name": "orders_region",
+        "model": "orders",
+        "predicate": "region = {{ user.region }}"
+      },
+      {
+        "name": "customers_region",
+        "model": "customers",
+        "predicate": "region = {{ user.region }}"
+      }
+    ],
+    "users": {
+      "eu_user": {
+        "region": "EU"
+      },
+      "no_region_user": {}
+    }
+  },
+  "cases": [
+    {
+      "id": "simple-01",
+      "category": "simple",
+      "logical_sql": "SELECT first_name, last_name FROM customers ORDER BY last_name LIMIT 10",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "WITH",
+          "ecommerce.customers",
+          "LIMIT 10"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "simple-02",
+      "category": "simple",
+      "logical_sql": "SELECT order_id, status FROM orders WHERE status = 'shipped'",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "status = 'shipped'"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "simple-03",
+      "category": "simple",
+      "logical_sql": "SELECT region, COUNT(*) AS order_count FROM orders GROUP BY region",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "GROUP BY"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "simple-04",
+      "category": "simple",
+      "logical_sql": "SELECT name, unit_price FROM products ORDER BY unit_price DESC LIMIT 5",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.products"
+        ],
+        "must_contain": [
+          "ORDER BY"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "limit-01",
+      "category": "default_limit",
+      "logical_sql": "SELECT customer_id FROM customers",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "LIMIT 1000"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-01",
+      "category": "join",
+      "logical_sql": "SELECT c.first_name, o.order_id FROM orders o JOIN customers c ON c.customer_id = o.customer_id",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders",
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "JOIN"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-02",
+      "category": "join",
+      "logical_sql": "SELECT p.name, SUM(oi.quantity) AS units FROM order_items oi JOIN products p ON p.product_id = oi.product_id GROUP BY p.name",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.order_items",
+          "ecommerce.products"
+        ],
+        "must_contain": [
+          "SUM"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-03",
+      "category": "join",
+      "logical_sql": "SELECT o.order_id, pay.amount FROM payments pay JOIN orders o ON o.order_id = pay.order_id",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.payments",
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "JOIN"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-04",
+      "category": "join",
+      "logical_sql": "SELECT p.name, c.name AS category FROM products p LEFT JOIN categories c ON c.category_id = p.category_id",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.products",
+          "ecommerce.categories"
+        ],
+        "must_contain": [
+          "LEFT JOIN"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-05",
+      "category": "join_fill_on",
+      "logical_sql": "SELECT o.order_id, c.email FROM orders o JOIN customers c",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders",
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "customer_id = "
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "join-06",
+      "category": "join_chain",
+      "logical_sql": "SELECT c.region, SUM(oi.quantity) AS units FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN order_items oi ON oi.order_id = o.order_id GROUP BY c.region",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.customers",
+          "ecommerce.orders",
+          "ecommerce.order_items"
+        ],
+        "must_contain": [
+          "GROUP BY"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "calc-01",
+      "category": "calculated_field",
+      "logical_sql": "SELECT order_id, SUM(line_total) AS order_total FROM order_items GROUP BY order_id",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.order_items"
+        ],
+        "must_contain": [
+          "quantity * unit_price AS line_total"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "calc-02",
+      "category": "calculated_field",
+      "logical_sql": "SELECT p.name, SUM(oi.line_total) AS revenue FROM order_items oi JOIN products p ON p.product_id = oi.product_id GROUP BY p.name ORDER BY revenue DESC LIMIT 5",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.order_items",
+          "ecommerce.products"
+        ],
+        "must_contain": [
+          "quantity * unit_price AS line_total"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "metric-01",
+      "category": "metric",
+      "logical_sql": "SELECT order_month, revenue FROM monthly_revenue ORDER BY order_month",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.order_items",
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "date_trunc('month'",
+          "GROUP BY"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "metric-02",
+      "category": "metric",
+      "logical_sql": "SELECT revenue FROM monthly_revenue WHERE order_month >= DATE '2026-01-01'",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.order_items",
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "2026-01-01"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "alias-01",
+      "category": "alias",
+      "logical_sql": "SELECT x.status FROM orders AS x WHERE x.region = 'EU'",
+      "user": null,
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "status"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "policy-01",
+      "category": "row_policy",
+      "logical_sql": "SELECT order_id FROM orders",
+      "user": "eu_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "region = %(",
+          "WHERE"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "policy-02",
+      "category": "row_policy_join",
+      "logical_sql": "SELECT o.order_id, c.email FROM orders o JOIN customers c ON c.customer_id = o.customer_id",
+      "user": "eu_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders",
+          "ecommerce.customers"
+        ],
+        "must_contain": [
+          "region = %("
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "policy-03",
+      "category": "row_policy_subquery",
+      "logical_sql": "SELECT customer_id FROM customers WHERE customer_id IN (SELECT customer_id FROM orders)",
+      "user": "eu_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.customers",
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "region = %("
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "policy-04",
+      "category": "row_policy_missing_attribute",
+      "logical_sql": "SELECT order_id FROM orders",
+      "user": "no_region_user",
+      "expect": {
+        "status": "ok",
+        "physical_relations": [
+          "ecommerce.orders"
+        ],
+        "must_contain": [
+          "FALSE"
+        ],
+        "must_not_contain": []
+      }
+    },
+    {
+      "id": "reject-01",
+      "category": "physical_name",
+      "logical_sql": "SELECT * FROM ecommerce.orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "UNKNOWN_MODEL"
+      }
+    },
+    {
+      "id": "reject-02",
+      "category": "system_catalog",
+      "logical_sql": "SELECT table_name FROM information_schema.tables",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "UNKNOWN_MODEL"
+      }
+    },
+    {
+      "id": "reject-03",
+      "category": "system_catalog",
+      "logical_sql": "SELECT usename FROM pg_catalog.pg_user",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "UNKNOWN_MODEL"
+      }
+    },
+    {
+      "id": "reject-04",
+      "category": "file_function",
+      "logical_sql": "SELECT pg_read_file('/etc/passwd')",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "DISALLOWED_FUNCTION"
+      }
+    },
+    {
+      "id": "reject-05",
+      "category": "non_select",
+      "logical_sql": "DELETE FROM orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "NON_SELECT"
+      }
+    },
+    {
+      "id": "reject-06",
+      "category": "non_select",
+      "logical_sql": "UPDATE customers SET email = 'x'",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "NON_SELECT"
+      }
+    },
+    {
+      "id": "reject-07",
+      "category": "stacked",
+      "logical_sql": "SELECT 1; DROP TABLE orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "NON_SELECT"
+      }
+    },
+    {
+      "id": "reject-08",
+      "category": "join_not_declared",
+      "logical_sql": "SELECT c.email, p.name FROM customers c JOIN products p ON p.product_id = c.customer_id",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "JOIN_NOT_ALLOWED"
+      }
+    },
+    {
+      "id": "reject-09",
+      "category": "unknown_column",
+      "logical_sql": "SELECT order_dt FROM orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "UNKNOWN_COLUMN"
+      }
+    },
+    {
+      "id": "reject-10",
+      "category": "syntax",
+      "logical_sql": "SELEC order_id FROM orders",
+      "user": null,
+      "expect": {
+        "status": "error",
+        "error_code": "SYNTAX_ERROR"
+      }
+    }
+  ]
+}

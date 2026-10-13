@@ -96,6 +96,8 @@ class AuthService:
             max_failures=max_failures,
             window_seconds=failure_window_seconds,
         )
+        self._context_cache: dict[str, tuple[float, AuthContext]] = {}
+        self._context_cache_lock = Lock()
 
     def login(self, username: str, password: str, client_key: str) -> LoginResult:
         normalized_username = username.strip().casefold()
@@ -205,12 +207,30 @@ class AuthService:
             )
         except jwt.InvalidTokenError as error:
             raise TokenError("Access token is invalid or expired") from error
-        context = self._repository.get_auth_context(str(claims["sub"]))
+        context = self._cached_auth_context(str(claims["sub"]))
         if context is None:
             raise TokenError("Access token is invalid or expired")
         if context.must_change_password and not allow_password_change:
             raise PasswordChangeRequired("Change the temporary password before continuing")
         return replace(context, session_id=str(claims["jti"]))
+
+    def _cached_auth_context(self, user_id: str) -> AuthContext | None:
+        now = time.monotonic()
+        with self._context_cache_lock:
+            cached = self._context_cache.get(user_id)
+            if cached is not None and cached[0] > now:
+                return cached[1]
+        context = self._repository.get_auth_context(user_id)
+        with self._context_cache_lock:
+            if context is None:
+                self._context_cache.pop(user_id, None)
+            else:
+                self._context_cache[user_id] = (now + 30, context)
+        return context
+
+    def invalidate_auth_context(self, user_id: str) -> None:
+        with self._context_cache_lock:
+            self._context_cache.pop(user_id, None)
 
     def change_password(
         self,
@@ -240,6 +260,7 @@ class AuthService:
             session_id,
             datetime.now(UTC),
         )
+        self.invalidate_auth_context(context.user_id)
         self._repository.append_auth_audit(
             context.user_id, "password_changed", context.username, {}
         )

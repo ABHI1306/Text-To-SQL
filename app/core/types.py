@@ -35,6 +35,7 @@ class AuditEvent:
 class QueryResult:
     columns: tuple[str, ...]
     rows: tuple[tuple[object, ...], ...]
+    truncated: bool = False
 
 
 @dataclass(frozen=True)

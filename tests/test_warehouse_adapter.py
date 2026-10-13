@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import app.adapters.warehouse.postgres as warehouse_module
 import app.adapters.warehouse.postgres_catalog as catalog_module
 from app.adapters.warehouse.postgres import (
     PostgresWarehouseAdapter,
@@ -46,6 +47,43 @@ def test_adapter_enforces_configured_row_cap() -> None:
             ValidatedQuery(sql="SELECT 1", parameters={}),
             max_rows=26,
         )
+
+
+def test_adapter_reports_when_results_are_truncated(monkeypatch) -> None:
+    class Cursor:
+        description = (type("Column", (), {"name": "id"})(),)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, *_args: object) -> None:
+            return None
+
+        def fetchmany(self, size: int) -> list[tuple[int]]:
+            assert size == 3
+            return [(1,), (2,), (3,)]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    monkeypatch.setattr(warehouse_module.psycopg, "connect", lambda *_args: Connection())
+    result = PostgresWarehouseAdapter("dbname=demo", max_rows=2).execute_read_only(
+        ValidatedQuery(sql="SELECT id FROM ecommerce.customers", parameters={}),
+        max_rows=2,
+    )
+
+    assert result.rows == ((1,), (2,))
+    assert result.truncated is True
 
 
 def test_catalog_adapter_uses_a_private_temporary_ca_file(monkeypatch) -> None:

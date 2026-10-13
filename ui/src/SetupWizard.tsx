@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import type { components } from './api/schema'
+import { PasswordField } from './PasswordField'
 
 type Project = components['schemas']['Project']
 type CatalogTable = components['schemas']['CatalogTable']
@@ -320,15 +321,12 @@ export function SetupWizard({
             <label>Read-only username
               <input onChange={(event) => updateDraft('username', event.target.value)} required value={form.username} />
             </label>
-            <label>Password
-              <input
+            <PasswordField label="Password"
                 autoComplete="new-password"
                 onChange={(event) => setPassword(event.target.value)}
                 required
-                type="password"
                 value={password}
               />
-            </label>
           </div>
           <label className="setup-checkbox">
             <input checked={form.ssl} onChange={(event) => updateDraft('ssl', event.target.checked)} type="checkbox" />
