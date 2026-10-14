@@ -1,0 +1,207 @@
+"""Scheduled jobs and per-slot leases in the metadata database."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import datetime
+from typing import TypeAlias, cast
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+
+from app.ports.scheduler import ScheduledJob
+
+Row: TypeAlias = dict[str, object]
+
+_COLUMNS = (
+    "id, project_id, owner_id, kind, schedule, timezone, status, paused_reason, "
+    "next_run_at, last_run_at, last_status"
+)
+
+
+class PostgresJobStore:
+    def __init__(self, dsn: str) -> None:
+        if not dsn:
+            raise ValueError("A metadata database URL is required")
+        self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
+
+    def _connect(self) -> psycopg.Connection[Row]:
+        return psycopg.connect(self._dsn, row_factory=dict_row)
+
+    def list_due(self, now: datetime, limit: int) -> list[ScheduledJob]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_COLUMNS} FROM scheduled_jobs
+                WHERE status = 'active' AND next_run_at <= %s
+                ORDER BY next_run_at LIMIT %s
+                """,
+                (now, limit),
+            )
+            return [_job(row) for row in cursor.fetchall()]
+
+    def list_stale(self, now: datetime, limit: int) -> list[tuple[ScheduledJob, datetime]]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT j.id, j.project_id, j.owner_id, j.kind, j.schedule, j.timezone, j.status,
+                       j.paused_reason, j.next_run_at, j.last_run_at, j.last_status, l.slot
+                FROM job_leases l JOIN scheduled_jobs j ON j.id = l.job_id
+                WHERE l.status = 'running' AND l.leased_until < %s AND j.status = 'active'
+                ORDER BY l.leased_until LIMIT %s
+                """,
+                (now, limit),
+            )
+            return [(_job(row), cast(datetime, row["slot"])) for row in cursor.fetchall()]
+
+    def claim(
+        self,
+        job: ScheduledJob,
+        slot: datetime,
+        worker_id: str,
+        lease_seconds: int,
+        advance_to: datetime | None,
+    ) -> int | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            if advance_to is not None:
+                # The row lock serialises racing workers: the loser finds next_run_at already
+                # moved (or the job paused) and claims nothing.
+                cursor.execute(
+                    """
+                    UPDATE scheduled_jobs SET next_run_at = %s, updated_at = now()
+                    WHERE id = %s::uuid AND status = 'active' AND next_run_at = %s
+                    """,
+                    (advance_to, job.id, slot),
+                )
+                if cursor.rowcount != 1:
+                    return None
+            # The (job_id, slot) primary key is the second, independent guard. An expired
+            # 'running' lease (its worker died) may be taken over; nothing else can.
+            cursor.execute(
+                """
+                INSERT INTO job_leases (job_id, slot, worker_id, leased_until)
+                VALUES (%s::uuid, %s, %s, now() + make_interval(secs => %s))
+                ON CONFLICT (job_id, slot) DO UPDATE
+                SET worker_id = EXCLUDED.worker_id,
+                    leased_until = EXCLUDED.leased_until,
+                    attempts = job_leases.attempts + 1,
+                    started_at = now()
+                WHERE job_leases.status = 'running' AND job_leases.leased_until < now()
+                  AND %s::boolean
+                RETURNING attempts
+                """,
+                (job.id, slot, worker_id, lease_seconds, advance_to is None),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                connection.rollback()  # also undoes the next_run_at move
+                return None
+            return int(cast(int, row["attempts"]))
+
+    def finish(
+        self,
+        job_id: str,
+        slot: datetime,
+        worker_id: str,
+        status: str,
+        result: Mapping[str, object] | None,
+        error: str | None,
+    ) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE job_leases
+                SET status = %s, result = %s, error = %s, finished_at = now()
+                WHERE job_id = %s::uuid AND slot = %s AND worker_id = %s AND status = 'running'
+                """,
+                (status, Jsonb(dict(result)) if result is not None else None, error,
+                 job_id, slot, worker_id),
+            )
+            if cursor.rowcount == 1:
+                cursor.execute(
+                    """
+                    UPDATE scheduled_jobs SET last_run_at = now(), last_status = %s
+                    WHERE id = %s::uuid
+                    """,
+                    (status, job_id),
+                )
+
+    def pause(self, job_id: str, reason: str) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE scheduled_jobs
+                SET status = 'paused', paused_reason = %s, updated_at = now()
+                WHERE id = %s::uuid
+                """,
+                (reason, job_id),
+            )
+
+    def get(self, job_id: str) -> ScheduledJob | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_COLUMNS} FROM scheduled_jobs WHERE id = %s::uuid", (job_id,)
+            )
+            row = cursor.fetchone()
+        return _job(row) if row else None
+
+    def get_for_project(self, project_id: str, kind: str) -> ScheduledJob | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_COLUMNS} FROM scheduled_jobs WHERE project_id = %s::uuid AND kind = %s",
+                (project_id, kind),
+            )
+            row = cursor.fetchone()
+        return _job(row) if row else None
+
+    def upsert_for_project(
+        self,
+        project_id: str,
+        owner_id: str,
+        kind: str,
+        schedule: str,
+        timezone: str,
+        next_run_at: datetime,
+    ) -> ScheduledJob:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO scheduled_jobs
+                    (project_id, owner_id, kind, schedule, timezone, next_run_at)
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s)
+                ON CONFLICT (project_id, kind) DO UPDATE
+                SET owner_id = EXCLUDED.owner_id, schedule = EXCLUDED.schedule,
+                    timezone = EXCLUDED.timezone, next_run_at = EXCLUDED.next_run_at,
+                    status = 'active', paused_reason = NULL, updated_at = now()
+                RETURNING {_COLUMNS}
+                """,
+                (project_id, owner_id, kind, schedule, timezone, next_run_at),
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        return _job(row)
+
+    def delete_for_project(self, project_id: str, kind: str) -> bool:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM scheduled_jobs WHERE project_id = %s::uuid AND kind = %s",
+                (project_id, kind),
+            )
+            return cursor.rowcount == 1
+
+
+def _job(row: Row) -> ScheduledJob:
+    return ScheduledJob(
+        id=str(row["id"]),
+        project_id=str(row["project_id"]),
+        owner_id=str(row["owner_id"]) if row["owner_id"] is not None else None,
+        kind=str(row["kind"]),
+        schedule=str(row["schedule"]),
+        timezone=str(row["timezone"]),
+        status=str(row["status"]),
+        next_run_at=cast(datetime, row["next_run_at"]),
+        paused_reason=cast("str | None", row["paused_reason"]),
+        last_run_at=cast("datetime | None", row["last_run_at"]),
+        last_status=cast("str | None", row["last_status"]),
+    )

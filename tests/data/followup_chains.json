@@ -1,0 +1,395 @@
+{
+ "description": "Follow-up chains. reference_standalone is the ideal rewrite (used by the scripted CI model); must_contain / must_not_contain score a model's rewrite. Messages are unique across files.",
+ "chains": [
+  {
+   "id": "chain-01-pronoun",
+   "turns": [
+    {
+     "message": "How many orders were placed in 2023?",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "How many orders were placed in 2023?",
+     "must_contain": [
+      "orders",
+      "2023"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Which customers placed those?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "Which customers placed the orders placed in 2023?",
+     "must_contain": [
+      "customers",
+      "2023"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "How many of them are in Germany?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "How many of the customers who placed orders in 2023 are in Germany?",
+     "must_contain": [
+      "germany",
+      "2023"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-02-pronoun",
+   "turns": [
+    {
+     "message": "Show the top 5 products by revenue.",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Show the top 5 products by revenue.",
+     "must_contain": [
+      "products",
+      "revenue"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "What is their average rating?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "What is the average rating of the top 5 products by revenue?",
+     "must_contain": [
+      "rating",
+      "products"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Which of them are out of stock?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "Which of the top 5 products by revenue are out of stock?",
+     "must_contain": [
+      "stock",
+      "products"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-03-ellipsis",
+   "turns": [
+    {
+     "message": "Total payments collected in January 2024",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Total payments collected in January 2024",
+     "must_contain": [
+      "payments",
+      "january"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "and for February?",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Total payments collected in February 2024",
+     "must_contain": [
+      "payments",
+      "february"
+     ],
+     "must_not_contain": [
+      "january"
+     ]
+    },
+    {
+     "message": "same but by payment method",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Total payments collected in February 2024 by payment method",
+     "must_contain": [
+      "payment method",
+      "february"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-04-ellipsis",
+   "turns": [
+    {
+     "message": "Order counts by status for the West region",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Order counts by status for the West region",
+     "must_contain": [
+      "status",
+      "west"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "what about the East?",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Order counts by status for the East region",
+     "must_contain": [
+      "east",
+      "status"
+     ],
+     "must_not_contain": [
+      "west"
+     ]
+    },
+    {
+     "message": "only the cancelled ones",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Count of cancelled orders for the East region",
+     "must_contain": [
+      "cancelled",
+      "east"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-05-topic-switch",
+   "turns": [
+    {
+     "message": "Revenue by product category in 2024",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Revenue by product category in 2024",
+     "must_contain": [
+      "revenue",
+      "category"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "List all employees hired after January 2023",
+     "intent": "data_question",
+     "kind": "topic_switch",
+     "reference_standalone": "List all employees hired after January 2023",
+     "must_contain": [
+      "employees",
+      "hired"
+     ],
+     "must_not_contain": [
+      "revenue",
+      "category",
+      "2024"
+     ]
+    },
+    {
+     "message": "Which departments have no employees?",
+     "intent": "data_question",
+     "kind": "topic_switch",
+     "reference_standalone": "Which departments have no employees?",
+     "must_contain": [
+      "departments"
+     ],
+     "must_not_contain": [
+      "revenue",
+      "hired"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chain-06-topic-switch",
+   "turns": [
+    {
+     "message": "Which shipments were delivered late in March?",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Which shipments were delivered late in March?",
+     "must_contain": [
+      "shipments",
+      "late",
+      "march"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "How many coupons are currently active?",
+     "intent": "data_question",
+     "kind": "topic_switch",
+     "reference_standalone": "How many coupons are currently active?",
+     "must_contain": [
+      "coupons",
+      "active"
+     ],
+     "must_not_contain": [
+      "shipments",
+      "late",
+      "march"
+     ]
+    },
+    {
+     "message": "And their discount percentages?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "What are the discount percentages of the currently active coupons?",
+     "must_contain": [
+      "discount",
+      "coupons"
+     ],
+     "must_not_contain": [
+      "shipments"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "chain-07-clarify-then-answer",
+   "turns": [
+    {
+     "message": "Show me the numbers please",
+     "intent": "clarify",
+     "kind": "first",
+     "reference_standalone": "Show me the numbers please",
+     "must_contain": [],
+     "must_not_contain": []
+    },
+    {
+     "message": "Order revenue by month in 2024",
+     "intent": "data_question",
+     "kind": "answer_to_clarification",
+     "reference_standalone": "Order revenue by month in 2024",
+     "must_contain": [
+      "revenue",
+      "month",
+      "2024"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Now only the top three months",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Order revenue for the top three months in 2024",
+     "must_contain": [
+      "top three",
+      "revenue"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-08-chitchat-between",
+   "turns": [
+    {
+     "message": "How many customers do we have per country?",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "How many customers do we have per country?",
+     "must_contain": [
+      "customers",
+      "country"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Cheers, nice work!",
+     "intent": "respond",
+     "kind": "chitchat",
+     "reference_standalone": "Cheers, nice work!",
+     "must_contain": [],
+     "must_not_contain": []
+    },
+    {
+     "message": "Now sort that by customer count descending",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "How many customers do we have per country, sorted by customer count descending?",
+     "must_contain": [
+      "customers",
+      "country",
+      "descending"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-09-pronoun-ellipsis",
+   "turns": [
+    {
+     "message": "Which products are below their reorder point?",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "Which products are below their reorder point?",
+     "must_contain": [
+      "products",
+      "reorder"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Where are they stored?",
+     "intent": "data_question",
+     "kind": "pronoun",
+     "reference_standalone": "In which inventory locations are the products below their reorder point stored?",
+     "must_contain": [
+      "products",
+      "reorder"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "just the warehouse in Lyon",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "Products below their reorder point stored in the Lyon warehouse",
+     "must_contain": [
+      "lyon",
+      "reorder"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  },
+  {
+   "id": "chain-10-vague-followup",
+   "turns": [
+    {
+     "message": "What is the average order value by region this year?",
+     "intent": "data_question",
+     "kind": "first",
+     "reference_standalone": "What is the average order value by region this year?",
+     "must_contain": [
+      "average order value",
+      "region"
+     ],
+     "must_not_contain": []
+    },
+    {
+     "message": "Is that good?",
+     "intent": "clarify",
+     "kind": "vague_followup",
+     "reference_standalone": "Is the average order value by region good?",
+     "must_contain": [],
+     "must_not_contain": []
+    },
+    {
+     "message": "Break it down by month",
+     "intent": "data_question",
+     "kind": "ellipsis",
+     "reference_standalone": "What is the average order value by region this year, by month?",
+     "must_contain": [
+      "average order value",
+      "month"
+     ],
+     "must_not_contain": []
+    }
+   ]
+  }
+ ]
+}

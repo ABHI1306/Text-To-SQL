@@ -46,6 +46,201 @@ const me = {
   projects: [project],
 }
 
+// ---- Day 6: knowledge, users/roles and row-policy mock state -------------------------------
+const allCapabilities = [...me.capabilities].sort()
+const uid = (n) => `6b8b4567-e89b-12d3-a456-4266141740${String(n).padStart(2, '0')}`
+const roles = [
+  { id: uid(10), name: 'DBA', description: 'Full access', is_system: true, capabilities: [...allCapabilities] },
+  { id: uid(11), name: 'Admin', description: 'Users and governance', is_system: true, capabilities: ['ask_question', 'view_shared', 'manage_users', 'manage_roles', 'view_audit'] },
+  { id: uid(12), name: 'User', description: 'Ask questions', is_system: true, capabilities: ['ask_question', 'give_feedback', 'view_shared'] },
+  { id: uid(13), name: 'Analyst+', description: 'Analyst with dashboards', is_system: false, capabilities: ['ask_question', 'view_shared', 'create_dashboard', 'schedule_question'] },
+]
+const users = [
+  { id: me.user_id, username: 'demo.dba', role: 'DBA', status: 'active', auth_source: 'local', locked_until: null, must_change_password: false },
+  { id: uid(21), username: 'maria', role: 'User', status: 'active', auth_source: 'local', locked_until: null, must_change_password: false },
+  { id: uid(22), username: 'jonas', role: 'Analyst+', status: 'active', auth_source: 'local', locked_until: new Date(Date.now() + 3_600_000).toISOString(), must_change_password: false },
+  { id: uid(23), username: 'sam.ldap', role: 'User', status: 'active', auth_source: 'ldap', locked_until: null, must_change_password: false },
+]
+const userAccess = {}
+const userAttributes = { [uid(21)]: { region: 'EU' } }
+const roleAccess = {}
+let identityMappings = [{ id: '1', source: 'ldap', match: 'cn=dbas,ou=groups', role: 'DBA' }]
+let instructions = [{ id: 'i1', text: 'Revenue excludes cancelled orders.' }]
+let sqlPairs = [{ id: 'p1', question: 'How many customers do we have?', logical_sql: 'SELECT count(*) FROM customers' }]
+let proposals = [
+  { id: 'pr1', question: 'Count of all customers', logical_sql: 'SELECT count(customer_id) FROM customers', proposed_by: 'maria', nearest_approved: sqlPairs[0] },
+  { id: 'pr2', question: 'Average order value by month', logical_sql: "SELECT date_trunc('month', order_date) m, avg(total) FROM orders GROUP BY 1", proposed_by: 'jonas', nearest_approved: null },
+]
+let policies = []
+let nextId = 100
+
+function currentCapabilities() {
+  const role = users[0].role
+  return roles.find((item) => item.name === role)?.capabilities ?? []
+}
+
+function handleAdmin(method, path, body) {
+  const m = (pattern) => path.match(pattern)
+  const json = (status, payload) => ({ status, payload })
+  const input = body ? JSON.parse(body) : {}
+  const p = '/api/v1'
+  let hit
+  if (method === 'GET' && path === `${p}/capabilities`) return json(200, { items: allCapabilities })
+  // knowledge
+  if ((hit = m(/^\/api\/v1\/projects\/[^/]+\/knowledge\/(instructions|sql-pairs|proposals)(?:\/([^/]+))?(?:\/(approve|reject))?$/))) {
+    const [, kind, id, decision] = hit
+    if (kind === 'instructions') {
+      if (!id && method === 'GET') return json(200, instructions)
+      if (!id && method === 'POST') {
+        const item = { id: `i${nextId++}`, text: input.text }
+        instructions = [...instructions, item]
+        return json(201, item)
+      }
+      const current = instructions.find((item) => item.id === id)
+      if (!current) return json(404, { detail: 'Instruction not found' })
+      if (method === 'PATCH') {
+        current.text = input.text
+        return json(200, current)
+      }
+      if (method === 'DELETE') {
+        instructions = instructions.filter((item) => item.id !== id)
+        return json(204)
+      }
+    }
+    if (kind === 'sql-pairs') {
+      if (!id && method === 'GET') return json(200, sqlPairs)
+      if (!id && method === 'POST') {
+        const item = { id: `p${nextId++}`, question: input.question, logical_sql: input.logical_sql }
+        sqlPairs = [...sqlPairs, item]
+        return json(201, item)
+      }
+      if (method === 'DELETE') {
+        sqlPairs = sqlPairs.filter((item) => item.id !== id)
+        return json(204)
+      }
+    }
+    if (kind === 'proposals') {
+      if (!id && method === 'GET') return json(200, proposals)
+      const proposal = proposals.find((item) => item.id === id)
+      if (!proposal) return json(404, { detail: 'Proposal not found' })
+      if (method === 'POST' && decision) {
+        proposals = proposals.filter((item) => item.id !== id)
+        if (decision === 'approve') sqlPairs = [...sqlPairs, { id: `p${nextId++}`, question: proposal.question, logical_sql: proposal.logical_sql }]
+        return json(200, { id, status: decision === 'approve' ? 'approved' : 'rejected' })
+      }
+    }
+  }
+  // users
+  if (method === 'GET' && path === `${p}/users`) return json(200, { items: users })
+  if (method === 'POST' && path === `${p}/users`) {
+    if (users.some((user) => user.username === String(input.username).toLowerCase())) return json(409, { detail: 'Username already exists' })
+    const user = { id: uid(30 + users.length), username: String(input.username).toLowerCase(), role: input.role ?? 'User', status: 'active', auth_source: 'local', locked_until: null, must_change_password: true }
+    users.push(user)
+    return json(201, { id: user.id, username: user.username, role: user.role })
+  }
+  if ((hit = m(/^\/api\/v1\/users\/([^/]+)\/(role|unlock|reset-password|project-access|attributes)$/))) {
+    const [, id, action] = hit
+    const user = users.find((item) => item.id === id)
+    if (!user) return json(404, { detail: 'User not found' })
+    if (action === 'role' && method === 'PUT') {
+      if (!roles.some((role) => role.name === input.role)) return json(404, { detail: 'Role does not exist' })
+      user.role = input.role
+      return json(200, { user_id: id, role: user.role })
+    }
+    if (action === 'unlock' && method === 'POST') {
+      user.locked_until = null
+      return json(200, { user_id: id, locked: false })
+    }
+    if (action === 'reset-password' && method === 'POST') {
+      if (user.auth_source !== 'local') return json(422, { detail: 'Only local accounts have a password to reset' })
+      user.must_change_password = true
+      user.locked_until = null
+      return json(200, { user_id: id, must_change_password: true })
+    }
+    if (action === 'project-access') {
+      if (method === 'GET') return json(200, { project_ids: userAccess[id] ?? [] })
+      userAccess[id] = input.project_ids
+      return json(200, { user_id: id, project_ids: input.project_ids })
+    }
+    if (action === 'attributes') {
+      if (method === 'GET') return json(200, { attributes: userAttributes[id] ?? {} })
+      userAttributes[id] = input.attributes
+      return json(200, { user_id: id, attributes: input.attributes })
+    }
+  }
+  // roles
+  if (path === `${p}/roles` && method === 'GET') return json(200, { items: roles })
+  if (path === `${p}/roles` && method === 'POST') {
+    if (roles.some((role) => role.name === input.name)) return json(409, { detail: 'Role name already exists' })
+    const role = { id: uid(40 + roles.length), name: input.name, description: input.description ?? '', is_system: false, capabilities: input.capabilities ?? [] }
+    roles.push(role)
+    return json(201, role)
+  }
+  if ((hit = m(/^\/api\/v1\/roles\/([^/]+)(\/project-access)?$/))) {
+    const [, id, access] = hit
+    const role = roles.find((item) => item.id === id)
+    if (!role) return json(404, { detail: 'Role not found' })
+    if (access) {
+      if (method === 'GET') return json(200, { project_ids: roleAccess[id] ?? [] })
+      roleAccess[id] = input.project_ids
+      return json(200, { role_id: id, project_ids: input.project_ids })
+    }
+    if (method === 'PUT') {
+      Object.assign(role, { name: input.name, description: input.description ?? '', capabilities: input.capabilities ?? [] })
+      return json(200, role)
+    }
+    if (method === 'DELETE') {
+      if (users.some((user) => user.role === role.name)) return json(409, { detail: 'Role is still assigned to users' })
+      roles.splice(roles.indexOf(role), 1)
+      return json(204)
+    }
+  }
+  // identity mappings
+  if (path === `${p}/identity/mappings` && method === 'GET') return json(200, { items: identityMappings })
+  if (path === `${p}/identity/mappings` && method === 'PUT') {
+    identityMappings = [
+      ...identityMappings.filter((item) => item.source !== input.source),
+      ...input.mappings.map((item, index) => ({ id: `${input.source}-${index}`, source: input.source, ...item })),
+    ]
+    return json(200, { source: input.source, count: input.mappings.length })
+  }
+  // row policies
+  if ((hit = m(/^\/api\/v1\/projects\/[^/]+\/row-policies(?:\/([^/]+))?$/))) {
+    const [, id] = hit
+    if (!id && method === 'GET') return json(200, { items: policies })
+    if (method === 'DELETE') {
+      policies = policies.filter((item) => item.id !== id)
+      return json(204)
+    }
+    if (method === 'POST' || method === 'PUT') {
+      if (String(input.predicate).includes('ghost')) {
+        return json(422, { detail: { code: 'POLICY_INVALID', errors: [{ code: 'UNKNOWN_COLUMN', message: "Column 'ghost' could not be resolved" }] } })
+      }
+      if (method === 'POST' && policies.some((item) => item.name === input.name)) return json(409, { detail: 'Policy name already exists' })
+      const policy = {
+        id: id ?? `pol${nextId++}`,
+        name: input.name,
+        model: input.model,
+        predicate: input.predicate,
+        appliesTo: { roles: input.appliesTo?.roles ?? [], exemptRoles: input.appliesTo?.exemptRoles ?? [] },
+        onMissingAttribute: 'deny',
+        enabled: input.enabled !== false,
+      }
+      policies = id ? policies.map((item) => (item.id === id ? policy : item)) : [...policies, policy]
+      const attrs = userAttributes[input.testUserId] ?? {}
+      const missing = [...String(input.predicate).matchAll(/\{\{\s*user\.(\w+)\s*\}\}/g)].map((x) => x[1]).filter((name) => !(name in attrs))
+      return json(method === 'POST' ? 201 : 200, {
+        ...policy,
+        validation: {
+          warnings: missing.map((name) => `Test user has no attribute ${name}; the policy denies by default`),
+          testCompilation: { ok: true, sql: `SELECT * FROM ${policy.model} WHERE ${policy.predicate}`, parameters: {}, appliedPolicies: [policy.name], missingAttributes: missing, errors: [] },
+        },
+      })
+    }
+  }
+  return null
+}
+
 const server = createServer(async (request, response) => {
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
@@ -53,6 +248,16 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1:4010')
   let status = 200
   let payload
+
+  const admin = handleAdmin(request.method ?? 'GET', url.pathname, body)
+  if (admin) {
+    response.writeHead(admin.status, {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+    })
+    response.end(admin.status === 204 ? undefined : JSON.stringify(admin.payload))
+    return
+  }
 
   if (
     request.method === 'POST'
@@ -106,7 +311,7 @@ const server = createServer(async (request, response) => {
   } else if (request.method === 'POST' && url.pathname === '/api/v1/auth/change-password') {
     status = 204
   } else if (request.method === 'GET' && url.pathname === '/api/v1/me') {
-    payload = me
+    payload = { ...me, role: users[0].role, capabilities: currentCapabilities(), projects: [project] }
   } else if (request.method === 'GET' && url.pathname === '/api/v1/projects') {
     payload = { items: [project] }
   } else if (request.method === 'POST' && url.pathname === '/api/v1/connections/test') {
@@ -220,6 +425,28 @@ const server = createServer(async (request, response) => {
         parameters: {},
         errors: [],
         preview: { asUserId: null, labeled: false },
+      }
+      if (input.previewAsUserId) {
+        const target = users.find((user) => user.id === input.previewAsUserId)
+        const attrs = userAttributes[input.previewAsUserId] ?? {}
+        const applied = policies.filter((policy) => policy.enabled && String(input.logicalSql).includes(policy.model))
+        const parameters = {}
+        let sql = payload.sql
+        for (const policy of applied) {
+          const predicate = policy.predicate.replace(/\{\{\s*user\.(\w+)\s*\}\}/g, (_, name) => {
+            parameters[`user_${name}`] = attrs[name] ?? null
+            return `%(user_${name})s`
+          })
+          sql += ` /* policy ${policy.name}: ${predicate} */`
+        }
+        payload = {
+          ...payload,
+          sql,
+          parameters,
+          appliedPolicies: applied.map((policy) => policy.name),
+          missingAttributes: [],
+          preview: { asUserId: target?.id ?? input.previewAsUserId, labeled: true },
+        }
       }
       if (input.sample) {
         payload.sample = {

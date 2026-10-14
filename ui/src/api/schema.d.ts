@@ -254,7 +254,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Same pipeline as `/query`, as server-sent events in this order (steps repeat on correction): retrieval, sql_candidate, compilation, validation, correction, rows, then done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts holding `rerun_sql`. `clarification` and `suggestions` events are defined for the conversation work and are not emitted yet. */
+        /** @description Same pipeline as `/query`, as server-sent events in this order (steps repeat on correction): retrieval, sql_candidate, compilation, validation, correction, rows, then done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts holding `rerun_sql`. `rewrite` (follow-ups only), `clarification` and `answer` replace the SQL steps when the message needs a question back or no query; `suggestions` is defined for the conversation work and is not emitted yet. */
         post: operations["askQuestionStream"];
         delete?: never;
         options?: never;
@@ -395,6 +395,192 @@ export interface paths {
         get: operations["getRoleProjectAccess"];
         put: operations["setRoleProjectAccess"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Capability catalogue for the custom role editor. Needs `manage_roles`. */
+        get: operations["listCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Clears the failed-login lockout. Audited as `user_unlocked`. Needs `manage_users`. */
+        post: operations["unlockUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sets a temporary password for a local account, revokes its sessions and requires a change at next sign-in. Audited as `user_password_reset`. Needs `manage_users`. */
+        post: operations["resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/instructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Needs `manage_knowledge`. */
+        get: operations["listInstructions"];
+        put?: never;
+        post: operations["createInstruction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/instructions/{instruction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteInstruction"];
+        options?: never;
+        head?: never;
+        patch: operations["updateInstruction"];
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/sql-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listSqlPairs"];
+        put?: never;
+        post: operations["createSqlPair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/sql-pairs/{pair_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteSqlPair"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listPairProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals/{proposal_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approveProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals/{proposal_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rejectProposal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -608,6 +794,39 @@ export interface components {
             enabled: boolean;
             /** Format: uuid */
             testUserId: string;
+        };
+        KnowledgeInstructionRequest: {
+            text: string;
+        };
+        KnowledgeInstruction: {
+            id: string;
+            text: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        SqlPairRequest: {
+            question: string;
+            sql: string;
+        };
+        SqlPair: {
+            id: string;
+            question: string;
+            sql: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        PairProposal: {
+            id: string;
+            question: string;
+            sql: string;
+            status?: string;
+            proposed_by?: string | null;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        /** @description The proposal fields, or `{proposal, nearest_approved}`; the UI accepts both shapes. */
+        PairProposalItem: components["schemas"]["PairProposal"] & {
+            nearest_approved?: components["schemas"]["SqlPair"] | null;
         };
         AuditPage: {
             items: {
@@ -1554,6 +1773,321 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    listCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sorted capability names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: string[];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    unlockUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Account unlocked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: password */
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Password reset; the user must change it at next sign-in. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listInstructions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instructions of the project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["KnowledgeInstruction"][];
+                    };
+                };
+            };
+        };
+    };
+    createInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeInstructionRequest"];
+            };
+        };
+        responses: {
+            /** @description Instruction created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeInstruction"];
+                };
+            };
+        };
+    };
+    deleteInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instruction deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    updateInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeInstructionRequest"];
+            };
+        };
+        responses: {
+            /** @description Instruction updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeInstruction"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    listSqlPairs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved question and SQL pairs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["SqlPair"][];
+                    };
+                };
+            };
+        };
+    };
+    createSqlPair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlPairRequest"];
+            };
+        };
+        responses: {
+            /** @description Pair created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPair"];
+                };
+            };
+        };
+    };
+    deleteSqlPair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pair deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    listPairProposals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending proposals, each with the nearest approved pair. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["PairProposalItem"][];
+                    };
+                };
+            };
+        };
+    };
+    approveProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Proposal approved and promoted to an SQL pair. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    rejectProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Proposal rejected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
         };
     };
     listSampleProjectTemplates: {

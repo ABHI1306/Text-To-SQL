@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from app.core.types import JsonValue, Principal
 from app.semantic.compiler import CompileError
@@ -24,8 +24,15 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     principal: Principal
     question: str
+    history: list[tuple[str, str | None]]
+    standalone_question: str
+    intent: str
+    reply: str | None
     context: RetrievalResult
     context_text: str
+    knowledge_text: str
+    knowledge_pairs: list[dict[str, str]]
+    knowledge_instructions: list[dict[str, str]]
     allowed_names: dict[str, list[str]]
     logical_sql: str | None
     sql: str | None
@@ -37,4 +44,6 @@ class AgentState(TypedDict, total=False):
     columns: list[str]
     rows: list[list[object]]
     truncated: bool
+    summary: str | None
+    chart: dict[str, Any] | None
     failure: StructuredFailure | None

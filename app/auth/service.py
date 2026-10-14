@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -17,7 +18,9 @@ from app.auth.identity import IdentityRepository, resolve_role
 from app.auth.models import AuthContext, LoginResult
 from app.auth.repository import AuthRepository
 from app.core.errors import PortError
+from app.core.types import JsonValue
 from app.ports.directory import DirectoryPort
+from app.ports.identity import VerifiedIdentity
 
 MIN_PASSWORD_LENGTH = 12
 _ISSUER = "text2sql-local"
@@ -160,40 +163,94 @@ class AuthService:
     ) -> LoginResult:
         """LDAP login: the directory verifies the password; nothing about it is stored."""
 
-        def refuse(reason: str, actor: str | None = None) -> AuthenticationError:
-            self._limiter.record_failure(rate_keys)
-            self._repository.append_auth_audit(
-                actor, "login_failed", username, {"source": "ldap", "reason": reason}
-            )
-            return AuthenticationError("Invalid username or password")
-
         assert self._directory is not None
         try:
             identity = self._directory.authenticate(username, password)
         except PortError as error:
-            raise refuse("directory_unavailable") from error
+            raise self._refuse("ldap", username, rate_keys, "directory_unavailable") from error
         if identity is None:
-            raise refuse("invalid_credentials", user.user_id if user else None)
+            raise self._refuse(
+                "ldap", username, rate_keys, "invalid_credentials", user.user_id if user else None
+            )
+        return self._finish_external(
+            "ldap", username, identity.groups, identity.attributes, rate_keys, user, now
+        )
+
+    def login_external(self, identity: VerifiedIdentity, client_key: str) -> LoginResult:
+        """Federated (OIDC) login: the provider has verified the person; open the local session.
+
+        The role comes from the DBA-managed group mappings for the identity's source and is
+        re-evaluated on every login, so a removed group takes effect at the next sign-in.
+        """
+        rate_keys = (f"ip:{client_key}", f"user:{identity.username}")
+        if not self._limiter.allow(rate_keys):
+            self._repository.append_auth_audit(
+                None, "login_rate_limited", identity.username, {"source": identity.source}
+            )
+            raise AuthenticationError("Invalid username or password")
+        user = self._repository.get_user_by_username(identity.username)
+        return self._finish_external(
+            identity.source, identity.username, identity.groups, identity.attributes,
+            rate_keys, user, datetime.now(UTC),
+        )
+
+    def record_external_failure(self, source: str, reason: str, client_key: str) -> None:
+        """Audit a refused federated login that never produced a verified identity."""
+        self._limiter.record_failure((f"ip:{client_key}",))
+        self._repository.append_auth_audit(
+            None, "login_failed", source, {"source": source, "reason": reason}
+        )
+
+    def external_login_allowed(self, client_key: str) -> bool:
+        return self._limiter.allow((f"ip:{client_key}",))
+
+    def _refuse(
+        self,
+        source: str,
+        username: str,
+        rate_keys: tuple[str, ...],
+        reason: str,
+        actor: str | None = None,
+    ) -> AuthenticationError:
+        self._limiter.record_failure(rate_keys)
+        self._repository.append_auth_audit(
+            actor, "login_failed", username, {"source": source, "reason": reason}
+        )
+        return AuthenticationError("Invalid username or password")
+
+    def _finish_external(
+        self,
+        source: str,
+        username: str,
+        groups: Sequence[str],
+        attributes: Mapping[str, JsonValue],
+        rate_keys: tuple[str, ...],
+        user: Any,
+        now: datetime,
+    ) -> LoginResult:
         if self._identity is None:
-            raise refuse("identity_mappings_unavailable")
-        role_name = resolve_role(identity.groups, self._identity.get_identity_mappings("ldap"))
+            raise self._refuse(source, username, rate_keys, "identity_mappings_unavailable")
+        role_name = resolve_role(groups, self._identity.get_identity_mappings(source))
         if role_name is None:
-            raise refuse("no_role_mapping", user.user_id if user else None)
+            raise self._refuse(
+                source, username, rate_keys, "no_role_mapping", user.user_id if user else None
+            )
         try:
             user_id = self._identity.provision_external_user(
-                username, "ldap", role_name, identity.attributes
+                username, source, role_name, attributes
             )
         except ValueError as error:
-            raise refuse("account_conflict") from error
+            raise self._refuse(source, username, rate_keys, "account_conflict") from error
         refreshed = self._repository.get_user_by_username(username)
         if (
             refreshed is None
             or refreshed.status != "active"
             or (refreshed.locked_until is not None and refreshed.locked_until > now)
         ):
-            raise refuse("account_disabled", user_id)
+            raise self._refuse(source, username, rate_keys, "account_disabled", user_id)
+        self.invalidate_auth_context(user_id)
         self._limiter.clear(rate_keys)
-        return self._open_session(user_id, username, "ldap", now)
+        return self._open_session(user_id, username, source, now)
 
     def _open_session(
         self, user_id: str, username: str, source: str, now: datetime

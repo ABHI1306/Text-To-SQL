@@ -18,7 +18,9 @@ from app.core.types import JsonValue, Principal
 from app.domain.mdl import Mdl
 from app.domain.policy import RowPolicy
 from app.ports.embedder import EmbedderPort
+from app.ports.knowledge import KnowledgeLookup
 from app.ports.llm import LLMPort
+from app.ports.threads import ThreadStorePort, Turn
 from app.ports.vector_store import VectorStorePort
 from app.ports.warehouse import WarehousePort
 from app.semantic.compiler import CompileError
@@ -44,6 +46,11 @@ class AskResult:
     attempts: int
     elapsed_ms: int
     failure: StructuredFailure | None
+    thread_id: str = ""
+    intent: str = "data_question"
+    reply: str | None = None
+    summary: str | None = None
+    chart: dict[str, Any] | None = None
     events: list[AskEvent] = field(default_factory=list)
 
 
@@ -59,12 +66,19 @@ class AskService:
         *,
         audit: AuditService | None = None,
         max_rows: int = 1000,
+        small_llm: LLMPort | None = None,
+        threads: ThreadStorePort | None = None,
+        summary_llm: LLMPort | None = None,
+        knowledge: KnowledgeLookup | None = None,
     ) -> None:
-        self._retrieval = RetrievalService(embedder, vector_store)
+        self._retrieval = RetrievalService(embedder, vector_store, knowledge=knowledge)
+        self._summary_llm = summary_llm
         self._llm = llm
         self._warehouse = warehouse
         self._audit = audit
         self._max_rows = max_rows
+        self._small_llm = small_llm
+        self._threads = threads
 
     def stream(
         self,
@@ -83,16 +97,25 @@ class AskService:
             raise ValueError("Question cannot be empty")
         graph = build_graph(
             AgentDeps(
-                mdl, version, policies, self._retrieval, self._llm, self._warehouse, self._max_rows
+                mdl, version, policies, self._retrieval, self._llm, self._warehouse, self._max_rows,
+                small_llm=self._small_llm, summary_llm=self._summary_llm,
             )
         )
+        thread_id = thread_id or str(uuid.uuid4())
+        turns = (
+            self._threads.history(thread_id, principal.user_id, limit=HISTORY_TURNS)
+            if self._threads
+            else []
+        )
         started = last = time.monotonic()
-        state: dict[str, Any] = {}
+        history = [(t.standalone_question, t.logical_sql) for t in turns]
+        state: dict[str, Any] = {"history": history}
         for update in graph.stream(
             {
                 "project_id": project_id,
-                "thread_id": thread_id or str(uuid.uuid4()),
+                "thread_id": thread_id,
                 "question": question.strip(),
+                "history": history,
                 "principal": principal,
             },
             stream_mode="updates",
@@ -107,8 +130,11 @@ class AskService:
         failure: StructuredFailure | None = state.get("failure")
         if capture is not None:
             capture.update(state)
+            capture["thread_id"] = thread_id
             capture["elapsed_ms"] = elapsed
         self._audit_question(principal, project_id, question, state, failure)
+        if failure is None:
+            self._remember(thread_id, principal, project_id, question, state)
         if failure is not None:
             yield AskEvent(
                 "error",
@@ -118,6 +144,7 @@ class AskService:
             yield AskEvent(
                 "done",
                 {
+                    "thread_id": thread_id,
                     "message_id": str(uuid.uuid4()),
                     "latency_ms": elapsed,
                     "policy_context": state.get("policy_context"),
@@ -136,12 +163,13 @@ class AskService:
         question: str,
         *,
         include_compiled: bool = False,
+        thread_id: str | None = None,
     ) -> AskResult:
         state: dict[str, Any] = {}
         events = list(
             self.stream(
                 project_id, version, mdl, principal, policies, question,
-                include_compiled=include_compiled, capture=state,
+                include_compiled=include_compiled, thread_id=thread_id, capture=state,
             )
         )
         by_type = {event.type: event for event in events}
@@ -162,7 +190,28 @@ class AskService:
             attempts=int(state.get("attempts", 0)),
             elapsed_ms=int(state.get("elapsed_ms", 0)),
             failure=failure,
+            thread_id=str(state.get("thread_id") or ""),
+            intent=str(state.get("intent") or "data_question"),
+            reply=state.get("reply"),
+            summary=state.get("summary"),
+            chart=state.get("chart"),
             events=events,
+        )
+
+    def _remember(
+        self, thread_id: str, principal: Principal, project_id: str, question: str,
+        state: Mapping[str, Any],
+    ) -> None:
+        if self._threads is None:
+            return
+        self._threads.append(
+            thread_id, principal.user_id, project_id,
+            Turn(
+                question[:2000],
+                str(state.get("standalone_question") or question)[:2000],
+                state.get("logical_sql") if state.get("intent") == "data_question" else None,
+                state.get("reply"),
+            ),
         )
 
     def _audit_question(
@@ -212,18 +261,31 @@ def _issues(errors: Sequence[CompileError]) -> list[JsonValue]:
     ]
 
 
+HISTORY_TURNS = 6
+
+
 def _events(
     node: str, change: Mapping[str, Any], state: Mapping[str, Any], include_compiled: bool
 ) -> Iterator[AskEvent]:
-    if node == "retrieve_context" and "context" in change:
+    if node == "rewrite_followup" and state.get("history"):
+        yield AskEvent("rewrite", {"question": change.get("standalone_question", "")})
+    elif node == "clarify":
+        yield AskEvent("clarification", {"message": state.get("reply")})
+    elif node == "respond":
+        yield AskEvent("answer", {"message": state.get("reply")})
+    elif node == "retrieve_context" and "context" in change:
         yield AskEvent(
             "retrieval",
             {
                 "models": [model.name for model in change["context"].models],
-                "pairs": [],
-                "instructions": [],
+                "pairs": list(state.get("knowledge_pairs") or []),
+                "instructions": list(state.get("knowledge_instructions") or []),
             },
         )
+    elif node == "summarize" and change.get("summary"):
+        yield AskEvent("summary", {"text": change["summary"]})
+    elif node == "chart" and change.get("chart"):
+        yield AskEvent("chart", {"spec": change["chart"]})
     elif node in {"generate_sql", "correct_sql"} and "logical_sql" in change:
         attempts = int(state.get("attempts", 0))
         if node == "correct_sql":

@@ -10,7 +10,7 @@ from app.agent.service import AskService
 from app.semantic.retrieval import RetrievalResult, RetrievedModel
 from tests.support.audit import RecordingAudit
 from tests.support.ecommerce_mdl import build_mdl, build_policies, build_principal
-from tests.test_agent_graph import FakeWarehouse, ScriptedLlm, sql
+from tests.test_agent_graph import FakeWarehouse, RoutingLlm, ScriptedLlm, sql
 
 MDL = build_mdl()
 
@@ -26,7 +26,7 @@ class StaticStore:
 
 
 def service(llm: Any, audit: RecordingAudit, warehouse: FakeWarehouse | None = None) -> AskService:
-    svc = AskService(StaticEmbedder(), StaticStore(), llm, warehouse or FakeWarehouse(), audit=audit)  # type: ignore[arg-type]
+    svc = AskService(StaticEmbedder(), StaticStore(), llm, warehouse or FakeWarehouse(), audit=audit, small_llm=RoutingLlm())  # type: ignore[arg-type]
 
     class Retrieval:
         def retrieve(self, *_: Any, **__: Any) -> RetrievalResult:
@@ -101,3 +101,33 @@ def test_an_empty_question_is_refused_before_anything_runs() -> None:
     with pytest.raises(ValueError, match="empty"):
         ask(service(ScriptedLlm(sql("SELECT 1")), audit), "   ")
     assert audit.events == []
+
+
+def test_a_thread_remembers_turns_and_feeds_them_to_the_rewrite() -> None:
+    from app.adapters.metadata.threads import InMemoryThreadStore
+
+    threads = InMemoryThreadStore()
+    small = RoutingLlm(rewrite="how many orders in 2024")
+    svc = service(ScriptedLlm(sql("SELECT order_id FROM orders")), RecordingAudit())
+    svc._small_llm, svc._threads = small, threads  # type: ignore[assignment]
+
+    first = ask(svc, "how many orders")
+    second = ask(svc, "and in 2024?", thread_id=first.thread_id)
+
+    assert second.events[0].type == "rewrite"
+    assert second.events[0].data["question"] == "how many orders in 2024"
+    turns = threads.history(first.thread_id, "u1", limit=10)
+    assert [t.question for t in turns] == ["how many orders", "and in 2024?"]
+    assert "SELECT order_id FROM orders" in small.prompts[-2]  # history reached the rewrite
+
+
+def test_another_users_thread_id_gives_no_history_and_cannot_be_written() -> None:
+    from app.adapters.metadata.threads import InMemoryThreadStore
+
+    threads = InMemoryThreadStore()
+    svc = service(ScriptedLlm(sql("SELECT order_id FROM orders")), RecordingAudit())
+    svc._threads = threads  # type: ignore[assignment]
+    first = ask(svc, "how many orders")
+    intruder = build_principal("u2", {"region": "West"})
+    with pytest.raises(PermissionError):
+        svc.ask("p", 1, MDL, intruder, build_policies(), "x", thread_id=first.thread_id)

@@ -4,10 +4,13 @@ import { hasCapability } from './api/access'
 import type { components } from './api/schema'
 import { AnswerPanel } from './AnswerPanel'
 import { streamQuestion, type AnswerRun } from './askStream'
+import { KnowledgeScreen } from './KnowledgeScreen'
 import { ModelCanvas } from './ModelCanvas'
 import { PasswordField } from './PasswordField'
 import { ProfileMenu } from './ProfileMenu'
+import { RowPoliciesScreen } from './RowPoliciesScreen'
 import { SetupWizard } from './SetupWizard'
+import { UsersRolesScreen } from './UsersRolesScreen'
 import './App.css'
 
 type Me = components['schemas']['Me']
@@ -45,6 +48,8 @@ const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capa
   { page: 'Evaluation', group: 'SYSTEM', capability: 'run_eval' },
 ]
 
+const adminPages: Page[] = ['Knowledge', 'Row policies', 'Users and roles']
+
 // Failed scheduled runs and drift reports arrive with the notification API (Day 7/8).
 const notificationCount = 0
 
@@ -60,6 +65,29 @@ const reviewRoles: ReviewRole[] = ['DBA', 'Admin', 'User', 'Custom: Analyst+']
 const reviewStates = ['Success', 'Streaming', 'Clarifying', 'Out of scope', 'Typed failure', 'Empty result', 'LLM unavailable']
 const setupSteps = ['Choose source', '1 Connect', '2 Tables', '3 Relationships']
 
+const PROJECT_KEY = 'selectedProjectId'
+
+function readStoredProject(): string | null {
+  try {
+    return window.localStorage.getItem(PROJECT_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeProject(projectId: string) {
+  try {
+    window.localStorage.setItem(PROJECT_KEY, projectId)
+  } catch {
+    // Remembering the choice is a convenience only.
+  }
+}
+
+function projectStatus(project: { setup_step?: string }): string {
+  if (!project.setup_step || project.setup_step === 'complete') return 'Model saved'
+  return `Setup: ${project.setup_step}`
+}
+
 function App() {
   const [profile, setProfile] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -73,6 +101,9 @@ function App() {
     Partial<components['schemas']['ConnectionRequest']>
   >({})
   const [activePage, setActivePage] = useState<Page>('Home')
+  const [selectedId, setSelectedId] = useState<string | null>(readStoredProject)
+  const [addingProject, setAddingProject] = useState(false)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
   const [activeThread, setActiveThread] = useState<string | null>(null)
   const [threadHistory, setThreadHistory] = useState<string[]>([])
   const [query, setQuery] = useState('')
@@ -251,6 +282,17 @@ function App() {
     () => navigation.filter(({ capability }) => hasCapability(profile?.capabilities ?? [], capability)),
     [profile],
   )
+  /** Refetches /me so a role or access change is reflected on the very next request. */
+  const refreshProfile = useCallback(async (): Promise<readonly string[] | null> => {
+    if (!accessToken) return null
+    try {
+      const next = await loadProfile(accessToken)
+      setProfile(next)
+      return next.capabilities
+    } catch {
+      return null
+    }
+  }, [accessToken])
   const visibleThreads = threadHistory.filter((thread) =>
     thread.toLowerCase().includes(search.toLowerCase()),
   )
@@ -258,7 +300,7 @@ function App() {
   async function submitQuestion(question = query) {
     const trimmed = question.trim()
     if (!trimmed) return
-    const projectId = profile?.projects[0]?.id
+    const projectId = selectedProjectId
     if (!projectId) {
       setQueryError('Create or select a PostgreSQL project before asking questions.')
       return
@@ -289,10 +331,53 @@ function App() {
     }
   }
 
+  function switchProject(projectId: string) {
+    setSwitcherOpen(false)
+    setAddingProject(false)
+    if (projectId === selectedProjectId) return
+    abortRef.current?.abort()
+    setSelectedId(projectId)
+    storeProject(projectId)
+    // Nothing from the previous database may linger on screen.
+    setRun(null)
+    setQueryError(null)
+    setQuery('')
+    setActiveThread(null)
+    setThreadHistory([])
+    setNotice(null)
+  }
+
+  function startNewProject() {
+    setSwitcherOpen(false)
+    setAddingProject(true)
+    setConnectionDraft({})
+    setActivePage('Setup')
+  }
+
+  function projectCreated(projectId: string) {
+    if (!accessToken) return
+    void loadProfile(accessToken)
+      .then((next) => {
+        setProfile(next)
+        if (next.projects.some((project) => project.id === projectId)) {
+          setSelectedId(projectId)
+          storeProject(projectId)
+        }
+      })
+      .catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : 'Could not reload project')
+      })
+  }
+
+  // Leaving Setup ends "add project" mode; coming back resumes the active project's setup.
+  if (addingProject && activePage !== 'Setup') setAddingProject(false)
+
   const busy = run?.status === 'running'
-  const selectedProject = profile?.projects[0]?.name ?? 'Loading project'
+  // Exactly one project (one database) is active at a time; every screen reads from it.
+  const activeProject = profile?.projects.find((project) => project.id === selectedId) ?? profile?.projects[0]
+  const selectedProject = activeProject?.name ?? (profile ? 'No project yet' : 'Loading project')
   const username = profile?.username ?? 'Loading account'
-  const selectedProjectId = profile?.projects[0]?.id
+  const selectedProjectId = activeProject?.id
 
   if (!authReady) {
     return <main className="auth-page" aria-live="polite">Checking local session…</main>
@@ -370,12 +455,12 @@ function App() {
             <select
               aria-label="Review screen"
               onChange={(event) => {
-                const page = navigation.find(({ page: option }) => option === event.target.value)?.page
+                const page = visibleNavigation.find(({ page: option }) => option === event.target.value)?.page
                 if (page) setActivePage(page)
               }}
               value={activePage}
             >
-              {navigation.map(({ page }) => <option key={page} value={page}>{page}</option>)}
+              {visibleNavigation.map(({ page }) => <option key={page} value={page}>{page}</option>)}
             </select>
           </label>
           <div className="review-control-group" aria-label="Role preview">
@@ -456,11 +541,48 @@ function App() {
             <span className="brand-mark">A</span>
             <span>Amazatic</span>
           </a>
-          <button className="project-switcher" type="button">
-            <span className="project-switcher-name">{selectedProject}</span>
-            <span className="model-version">v3 active</span>
-            <small>acme_prod · PostgreSQL 16</small>
-          </button>
+          <div
+            className="project-switcher-wrap"
+            onKeyDown={(event) => { if (event.key === 'Escape') setSwitcherOpen(false) }}
+          >
+            <button
+              aria-expanded={switcherOpen}
+              aria-haspopup="listbox"
+              aria-label="Switch project"
+              className="project-switcher"
+              onClick={() => setSwitcherOpen((open) => !open)}
+              type="button"
+            >
+              <span className="project-switcher-name">{selectedProject}</span>
+              {activeProject && <span className="model-version">{projectStatus(activeProject)}</span>}
+              <small>PostgreSQL</small>
+            </button>
+            {switcherOpen && (
+              <ul aria-label="Projects" className="project-menu" role="listbox">
+                {(profile?.projects ?? []).map((project) => (
+                  <li key={project.id} role="presentation">
+                    <button
+                      aria-selected={project.id === selectedProjectId}
+                      className="project-menu-item"
+                      onClick={() => switchProject(project.id)}
+                      role="option"
+                      type="button"
+                    >
+                      <span>{project.name}</span>
+                      <small>{projectStatus(project)}</small>
+                    </button>
+                  </li>
+                ))}
+                {hasCapability(profile?.capabilities ?? [], 'manage_connection') && (
+                  <li role="presentation">
+                    <button className="project-menu-item project-menu-add" onClick={startNewProject} role="option" type="button">
+                      + Add project
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
           <nav className="product-nav" aria-label="Main navigation">
             {(['ASK', 'WORK', 'ADMIN', 'SYSTEM'] as const).map((group) => {
               const items = visibleNavigation.filter((item) => item.group === group)
@@ -619,20 +741,53 @@ function App() {
           {activePage === 'Setup' ? <SetupWizard
             apiRequest={apiRequest}
             draft={connectionDraft}
-            existingProject={profile.projects[0]}
+            existingProject={addingProject ? undefined : activeProject}
+            key={addingProject ? 'new-project' : (selectedProjectId ?? 'none')}
             onDraftChange={setConnectionDraft}
-            onModelSaved={() => setActivePage('Connect and model')}
-            onProjectCreated={() => {
-              if (accessToken) {
-                void loadProfile(accessToken).then(setProfile).catch((reason: unknown) => {
-                  setError(reason instanceof Error ? reason.message : 'Could not reload project')
-                })
-              }
+            onModelSaved={() => {
+              setAddingProject(false)
+              setActivePage('Connect and model')
             }}
+            onProjectCreated={projectCreated}
           /> : <ModelCanvas
             apiRequest={apiRequest}
-            projectId={profile.projects[0]?.id}
+            key={selectedProjectId ?? 'none'}
+            projectId={selectedProjectId}
           />}
+          </main>
+        ) : adminPages.includes(activePage) ? (
+          <main className="placeholder-main">
+          <header className="workspace-topbar">
+            <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
+            <span className="local-status"><i />Local only · PostgreSQL</span>
+          </header>
+          {!visibleNavigation.some(({ page }) => page === activePage) ? (
+            <section className="placeholder-content">
+              <h1>No access</h1>
+              <p role="alert">Your role does not include the capability needed for {activePage}.</p>
+              <button className="primary-action" onClick={() => setActivePage('Home')} type="button">Return to Home</button>
+            </section>
+          ) : activePage === 'Knowledge' ? (
+            <KnowledgeScreen
+              apiRequest={apiRequest}
+              canApprove={hasCapability(profile.capabilities, 'approve_pairs')}
+              key={selectedProjectId ?? 'none'}
+              projectId={selectedProjectId}
+            />
+          ) : activePage === 'Row policies' ? (
+            <RowPoliciesScreen
+              apiRequest={apiRequest}
+              key={selectedProjectId ?? 'none'}
+              projectId={selectedProjectId}
+              self={{ id: profile.user_id, username: profile.username }}
+            />
+          ) : (
+            <UsersRolesScreen
+              apiRequest={apiRequest}
+              capabilities={profile.capabilities}
+              refreshProfile={refreshProfile}
+            />
+          )}
           </main>
         ) : (
           <main className="placeholder-main">

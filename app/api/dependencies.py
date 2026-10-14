@@ -7,16 +7,23 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.adapters.identity.ldap import LdapConfig, LdapDirectory
+from app.adapters.identity.oidc import OidcConfig, OidcProvider
+from app.adapters.llm.ollama_embedder import OllamaEmbedderAdapter
 from app.adapters.metadata.governance import PostgresGovernanceRepository
+from app.adapters.metadata.knowledge import PostgresKnowledgeRepository
+from app.adapters.metadata.oidc_state import PostgresOidcStateStore
 from app.adapters.metadata.postgres import PostgresMetadataRepository
+from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
+from app.auth.oidc import OidcLoginService
 from app.auth.service import (
     AuthenticationError,
     AuthService,
     PasswordChangeRequired,
 )
 from app.config import Settings, get_settings
+from app.knowledge.service import KnowledgeService
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -36,9 +43,7 @@ def build_directory(settings: Settings) -> LdapDirectory | None:
     """The LDAP directory when LDAP_URI is set; local accounts only otherwise."""
     if not settings.ldap_uri:
         return None
-    attribute_map = dict(
-        pair.split("=", 1) for pair in settings.ldap_attribute_map.split(",") if "=" in pair
-    )
+    attribute_map = parse_attribute_map(settings.ldap_attribute_map)
     return LdapDirectory(
         LdapConfig(
             uri=settings.ldap_uri,
@@ -74,6 +79,43 @@ def get_auth_service() -> AuthService:
         refresh_token_ttl_seconds=settings.refresh_token_ttl_seconds,
         max_failures=settings.login_max_failures,
         lockout_seconds=settings.login_lockout_seconds,
+    )
+
+
+def parse_attribute_map(raw: str) -> dict[str, str]:
+    return dict(pair.split("=", 1) for pair in raw.split(",") if "=" in pair)
+
+
+def build_oidc_provider(settings: Settings) -> OidcProvider | None:
+    """The OIDC provider when OIDC_ISSUER is set; password and LDAP login only otherwise."""
+    if not settings.oidc_issuer:
+        return None
+    return OidcProvider(
+        OidcConfig(
+            issuer=settings.oidc_issuer,
+            client_id=settings.oidc_client_id,
+            client_secret=settings.oidc_client_secret,
+            redirect_uri=settings.oidc_redirect_uri,
+            discovery_url=settings.oidc_discovery_url,
+            scopes=tuple(settings.oidc_scopes.split()),
+            username_claim=settings.oidc_username_claim,
+            groups_claim=settings.oidc_groups_claim,
+            attribute_map=parse_attribute_map(settings.oidc_attribute_map),
+            allow_insecure=settings.oidc_allow_insecure,
+        )
+    )
+
+
+@lru_cache
+def get_oidc_service() -> OidcLoginService | None:
+    settings = get_settings()
+    provider = build_oidc_provider(settings)
+    if provider is None:
+        return None
+    return OidcLoginService(
+        provider,
+        PostgresOidcStateStore(settings.metadata_database_url),
+        get_auth_service(),
     )
 
 
@@ -143,6 +185,33 @@ def get_governance_repository() -> PostgresGovernanceRepository:
             detail="Metadata database is not configured",
         )
     return PostgresGovernanceRepository(settings.metadata_database_url)
+
+
+@lru_cache
+def get_knowledge_repository() -> PostgresKnowledgeRepository:
+    settings = get_settings()
+    if not settings.metadata_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Metadata database is not configured",
+        )
+    return PostgresKnowledgeRepository(settings.metadata_database_url)
+
+
+@lru_cache
+def _knowledge_index() -> tuple[OllamaEmbedderAdapter, QdrantVectorStoreAdapter]:
+    settings = get_settings()
+    return (
+        OllamaEmbedderAdapter(settings.ollama_url, settings.embedding_model),
+        QdrantVectorStoreAdapter(settings.qdrant_url),
+    )
+
+
+def get_knowledge_service(
+    repository: Annotated[PostgresKnowledgeRepository, Depends(get_knowledge_repository)],
+) -> KnowledgeService:
+    embedder, vector_store = _knowledge_index()
+    return KnowledgeService(repository, embedder, vector_store)
 
 
 def get_audit_service(

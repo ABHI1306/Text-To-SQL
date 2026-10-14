@@ -1,79 +1,108 @@
 # Text-to-SQL Platform
 
-A local-first Text-to-SQL platform for PostgreSQL. The Home screen can run a prototype
-question-to-SQL flow against a deployed semantic model and the connected PostgreSQL
-project. The flow enforces read-only SQL, table/column allowlists, safe function checks,
-statement timeouts, and row caps. This is not yet the planned logical-SQL compiler or a
-production-ready policy engine.
+A local-first Text-to-SQL platform for PostgreSQL. A user asks a question in plain language;
+a local LLM (Ollama) writes logical SQL over a semantic model, a compiler turns it into
+PostgreSQL SQL with row-level security applied, a validator checks it, and the rows come
+back with a step timeline, charts and a summary. Everything runs on your own machine:
+no data or prompts leave it. Only PostgreSQL is supported as a data source.
 
-## Local setup
+## Quick start (new machine)
 
-Requirements: `uv`, Docker Compose (or a compatible Compose provider), Node.js 22+, npm,
-and Ollama for local model testing.
+### 1. Prerequisites
+
+| Tool | Notes |
+| --- | --- |
+| Docker with Compose (or Podman with the Docker CLI emulation) | runs PostgreSQL, Qdrant, Ollama, the API and the worker |
+| [`uv`](https://docs.astral.sh/uv/) | Python environment; only needed on the host for `make check` and the helper commands |
+| Node.js 22+ and npm | the web UI runs on the host with Vite |
+| 16 GB RAM minimum (project document tier A: CPU only, one 7B-class model) | a GPU with 12-16 GB VRAM (tier B) is the reference; on CPU answers are slow. Leave several GB of disk for the Ollama models |
+
+Ports used on the host: 8000 (API), 4173 (UI), 6333 (Qdrant), and 55432 / 55433 (the metadata
+and demo PostgreSQL databases; change them with `METADATA_HOST_PORT` / `DEMO_HOST_PORT` in
+`.env`). Ollama runs inside Compose and is not published to the host.
+
+### 2. Configure `.env`
 
 ```bash
 cp .env.example .env
-uv sync
 ```
 
-The `.env.example` values are development-only placeholders. Before starting, generate
-a strong `JWT_SECRET` (at least 32 characters) and a Fernet key for
-`CONNECTION_ENCRYPTION_KEY`, then set both in `.env`:
+Edit `.env`:
 
-```bash
-openssl rand -hex 32
-uv run -- python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
+1. Replace every `*_change_me` password with your own.
+2. Generate the two secrets and paste them in:
+   ```bash
+   openssl rand -hex 32     # JWT_SECRET (at least 32 characters)
+   uv run -- python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"   # CONNECTION_ENCRYPTION_KEY
+   ```
+3. Set `BOOTSTRAP_DBA_PASSWORD` (at least 12 characters). It is only the temporary password
+   of the first account (`BOOTSTRAP_DBA_USERNAME`, default `demo.dba`).
 
-Also set a temporary `BOOTSTRAP_DBA_PASSWORD` with at least 12 characters. Replace the
-database placeholder passwords before sharing the machine or exposing any port to a
-network. Do not commit `.env`. Non-development API startup refuses missing or invalid
-JWT/encryption secrets.
+`.env` is ignored by git. Never commit it. Do not use the placeholder values on a shared
+machine or a network-reachable host.
 
-The bootstrap command creates the initial local DBA account and forces a password
-change at first sign-in. After it succeeds, remove `BOOTSTRAP_DBA_PASSWORD` from `.env`
-and recreate the API container. Create/reset local accounts with `make user-create
-USERNAME=analyst` and `make user-reset-dba USERNAME=analyst`; both commands prompt for
-the temporary password without echoing it.
-
-Then start the services, apply migrations, and create the first DBA:
+### 3. Start the stack
 
 ```bash
 docker compose --env-file .env up -d --build
-docker compose --env-file .env --profile tools run --rm migrate
-make user-bootstrap-dba
+docker compose --env-file .env --profile tools run --rm migrate     # apply all database migrations
+make user-bootstrap-dba                                              # create the first DBA account
+curl http://localhost:8000/health                                    # should answer {"status":"ok"}
 ```
 
-The Compose network is internal to the local stack. The Compose-managed Ollama volume
-starts empty; model weights are not downloaded automatically. The smoke harness below
-uses the host Ollama service, which is separate from Compose Ollama. A model ending in
-`-cloud` is not suitable because it sends inference to an external service.
+After the account exists, delete `BOOTSTRAP_DBA_PASSWORD` from `.env` and recreate the API:
+`docker compose --env-file .env up -d --force-recreate api`.
 
-The setup above applies the Day 3 migration. To enable real question results, install
-both local Ollama models explicitly, save and deploy the project's semantic model, then
-ask a question on Home:
+The Compose network is internal: containers can reach each other but not the internet.
+Create more accounts with `make user-create USERNAME=analyst` and reset one with
+`make user-reset-dba USERNAME=analyst`.
+
+### 4. Install the local models
+
+Model weights are not downloaded automatically (the Ollama volume starts empty):
 
 ```bash
 docker compose --env-file .env exec ollama ollama pull llama3:latest
 docker compose --env-file .env exec ollama ollama pull nomic-embed-text:latest
 ```
 
-`SQL_MODEL` defaults to `llama3:latest` and `EMBEDDING_MODEL` defaults to
-`nomic-embed-text:latest`. If you configure different model names in `.env`, pull those
-names instead; no model is fetched automatically. In the UI, finish Setup and save the
-MDL, open **Connect and model**, and choose **Deploy model**. Then open Home and ask
-about the project's data. Start the UI with `npm run dev` against the local API for
-PostgreSQL results; `npm run dev:mock` deliberately shows labeled mock preview data.
+`SQL_MODEL` (default `llama3:latest`) writes the SQL, `EMBEDDING_MODEL` (default
+`nomic-embed-text:latest`) powers retrieval, and the optional `SMALL_MODEL` is used for the
+cheap routing steps and falls back to `SQL_MODEL` when empty. If you set other names in
+`.env`, pull those instead. Do not use a model whose name ends in `-cloud`: it sends
+inference to an external service.
 
-Check the API:
+### 5. Start the UI
 
 ```bash
-curl http://localhost:8000/health
+cd ui
+npm ci
+npm run generate:api
+npm run dev
 ```
 
-The demo database is initialized with e-commerce and HR sample schemas only when its
-volume is first created. If initialization fails, inspect the logs; only remove/recreate
-the named demo volume if you intentionally want to discard its contents.
+Open <http://127.0.0.1:4173> and sign in with `BOOTSTRAP_DBA_USERNAME` and its temporary
+password; you will be asked to change it. The dev server talks to the API at
+`http://127.0.0.1:8000` (override with `VITE_API_PROXY_TARGET`). `npm run dev:mock` runs
+against labelled fixtures instead of the real API.
+
+### 6. Connect a database and ask a question
+
+1. Open **Setup**, then the **PostgreSQL** card. To try the bundled sample data use host
+   `demo-db`, port `5432`, database `demo`, user `warehouse_reader` and the
+   `WAREHOUSE_READER_PASSWORD` from your `.env`.
+2. **Test connection**, create the project, **select tables**, define relationships, then
+   **Validate and save model**.
+3. In **Connect and model** open the **Deploy report** tab and click **Deploy model**.
+4. Open **Home** and ask about the data, for example "How many customers do we have?".
+
+You can add more databases with **+ Add project** in the project switcher at the top of the
+sidebar. One project (one database) is active at a time and every screen shows that
+project's data.
+
+The demo database is seeded with e-commerce and HR sample schemas only when its volume is
+first created. If initialization fails, inspect the logs; remove the named demo volume only
+if you intentionally want to discard its contents.
 
 ## External PostgreSQL sample databases
 
@@ -97,6 +126,50 @@ Restore downloaded data into a local PostgreSQL server and connect with a read-o
 database account. Do not expose a database to the internet for this test. To connect a
 different server through the Compose API, add only its intended hostname or IP address
 to `DB_HOST_ALLOWLIST` in `.env`; the application rejects hosts not on that allowlist.
+
+## Connecting your own PostgreSQL database
+
+The API runs inside Docker, so the host you type in **Setup** is resolved from inside the
+API container, not from your machine:
+
+- `localhost` means the API container itself, not your computer.
+- The Compose network (`<project>_local`, for example `texttosql_local`) is internal: it has
+  no route to your host or the internet. Put the database on that network and use its
+  container name as the host, for example:
+  ```bash
+  docker run -d --name my-pg --network texttosql_local \
+    -e POSTGRES_PASSWORD=admin_pw -e POSTGRES_DB=mydb postgres:16
+  ```
+  (`docker network ls` shows the exact network name on your machine.)
+- Add the host to `DB_HOST_ALLOWLIST` in `.env` (comma separated, no spaces; a name, an IP
+  or a CIDR range) and recreate the API so it picks the change up:
+  ```bash
+  docker compose --env-file .env up -d --force-recreate api
+  docker compose --env-file .env exec api env | grep DB_HOST_ALLOWLIST
+  ```
+- Connect with a read-only account that can only `SELECT` the schemas you want exposed:
+  ```sql
+  CREATE ROLE app_reader LOGIN PASSWORD '...';
+  GRANT CONNECT ON DATABASE mydb TO app_reader;
+  GRANT USAGE ON SCHEMA public TO app_reader;
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_reader;
+  ```
+- The app is local-only. Do not expose a database to the internet for testing.
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+| --- | --- |
+| "Database host is not in DB_HOST_ALLOWLIST" | The host is missing from `DB_HOST_ALLOWLIST`, or the API was not recreated after editing `.env`. A `DB_HOST_ALLOWLIST` exported in your shell overrides `.env`: run `unset DB_HOST_ALLOWLIST`, recreate the API, then check with the `env \| grep` command above. |
+| "Could not read database catalog" in Setup | The connected database is unreachable. Check that its container is running (`docker ps -a`), is on the Compose network, and that the host, port and read-only password are right. Containers do not restart on their own after a reboot unless created with `--restart unless-stopped`. |
+| Connection test fails with a name error | The host is not resolvable from the API container. Use the container name on the Compose network, not `localhost`. |
+| `docker compose` complains about `METADATA_ADMIN_PASSWORD` or similar | `.env` is missing or a required password is unset. Copy `.env.example` and fill it in. |
+| The API refuses to start (secrets) | `JWT_SECRET` (32+ characters) or `CONNECTION_ENCRYPTION_KEY` (a Fernet key) is missing or invalid. |
+| Questions fail with "LLM unavailable" | The Ollama models are not pulled yet, or `SQL_MODEL` / `EMBEDDING_MODEL` name a model you did not pull. |
+| Home answers "No relevant models" or never returns rows | The model was saved but not deployed. Deploy it from **Connect and model**. |
+| The API container shows `unhealthy` right after start | It is still starting; check `docker compose logs api` and `curl localhost:8000/health`. |
+| Port already in use | Another service holds 8000, 4173, 6333, 55432 or 55433. Stop it or change the port. |
+| Using Podman | The Docker CLI emulation works, but commands may print an emulation notice. Create `/etc/containers/nodocker` to silence it. |
 
 ## Checks
 
@@ -260,3 +333,19 @@ Execution accuracy runner: `scripts/evaluate_execution.py`; the baseline and its
 `docs/DECISIONS.md` and `reports/`. Day 5 is not signed off: the references behind the baseline
 are unapproved drafts, and the compiler/validator line-by-line review and the hostile-query
 session are still open.
+
+OpenID Connect login (Day 6) is enabled by `OIDC_ISSUER` (see `.env.example`): `GET
+/api/v1/auth/oidc/login` redirects to the provider (authorization code + PKCE) and
+`GET /api/v1/auth/oidc/callback` returns the same session as `/auth/login`. Map provider groups
+to roles with `PUT /identity/mappings` using `"source": "oidc"`. To try it with Keycloak:
+
+    # set OIDC_CLIENT_SECRET and KEYCLOAK_ADMIN_PASSWORD in .env, apply migration 0006_day6
+    docker compose -f docker-compose.yml -f docker-compose.oidc.yml --profile identity-demo up -d
+    # then open http://localhost:8000/api/v1/auth/oidc/login (demo users: scripts/oidc/realm-text2sql.json)
+    OIDC_TEST_ISSUER=http://localhost:8081/realms/text2sql OIDC_TEST_CLIENT_SECRET=... uv run pytest tests/test_oidc_live.py
+
+The `worker` service runs scheduled profiling and drift detection. Set a schedule with
+`PUT /api/v1/projects/{id}/profiling-schedule` (cron, at most every 15 minutes; the job runs as
+the person who set it), read results at `GET /api/v1/projects/{id}/drift-reports`, and turn a
+report into a draft MDL revision with `POST .../drift-reports/{reportId}/draft`. Migration
+`0006_day6` (the single Day 6 migration) also adds the job, lease, drift-report and OIDC-state tables.

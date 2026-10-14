@@ -4,6 +4,7 @@ from typing import ClassVar
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.adapters.metadata.threads import InMemoryThreadStore
 from app.agent import factory
 from app.api import ask_routes
 from app.api import routes as api_routes
@@ -89,7 +90,9 @@ class FakeLlm:
         pass
 
     def generate(self, prompt: str, *, temperature: float = 0.0, schema: object = None) -> str:
-        del prompt, temperature, schema
+        del temperature, schema
+        if "<message>" in prompt:
+            return '{"intent":"data_question","message":""}'
         return '{"logical_sql":"SELECT customer_id FROM customers"}'
 
 
@@ -226,11 +229,16 @@ def _ask_client(monkeypatch, capabilities: set[str]):  # type: ignore[no-untyped
                 "ollama_url": "http://ollama",
                 "embedding_model": "embed",
                 "sql_model": "sql",
+                "small_model": "",
                 "warehouse_statement_timeout_ms": 10000,
                 "warehouse_max_rows": 1000,
             },
         )(),
     )
+    monkeypatch.setattr(
+        ask_routes, "get_settings", lambda: type("S", (), {"metadata_database_url": "postgresql://x"})()
+    )
+    monkeypatch.setattr(ask_routes, "PostgresThreadStore", lambda _dsn: InMemoryThreadStore())
     audit = RecordingAudit()
     app = FastAPI()
     app.include_router(ask_routes.router)

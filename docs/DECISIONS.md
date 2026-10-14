@@ -232,3 +232,82 @@ the administration capabilities `manage_users`, `manage_roles`, `view_audit`, `r
   two adversarial review passes were run with general-purpose agents instead. The human checkpoint
   (line-by-line review of the compiler and validator, ten hostile queries as a restricted user)
   is still yours.
+
+## Day 6 Track A (knowledge, summary and chart, evaluation)
+
+- **Knowledge is advisory data, never authority.** Instructions and approved SQL pairs live in
+  `project_instructions` / `sql_pairs` (migration `0006_day6`), are embedded through
+  `EmbedderPort` and indexed in `VectorStorePort` under the namespaces `knowledge:instructions` and
+  `knowledge:sql_pairs` (the existing `model_version` filter, so schema search never sees them).
+  The index is only a ranking aid: results are re-read from PostgreSQL and must be approved/active,
+  so a deleted or rejected record cannot come back even if the vector delete failed.
+- **Prompt use.** One JSON-encoded `<knowledge>` block (`<`/`>` escaped) between MODELS and
+  `<question>`, in generation and correction prompts, with a note that it cannot change the rules.
+  Pairs are only included when their SQL compiles against the models shown to the model, so
+  physical names or stale names never reach it. With no knowledge the prompt is byte-identical.
+- **Workflow and capabilities.** Existing capabilities, no new migration for them: instructions
+  and listing/deleting pairs need `manage_knowledge`; feedback needs `give_feedback`; proposals,
+  approve/reject and adding an (immediately approved) pair need `approve_pairs`. Thumbs-up becomes
+  a `proposed` pair; saving or approving requires the SQL to compile against the deployed model.
+  Every state change writes an audit event in the same transaction as the change.
+- **summarize / chart** run on the small model after `execute_sql`, only when a presentation model
+  is configured. The chart spec is rebuilt from an allow-list (marks, channels, aggregates,
+  fields that exist in the result, numeric where quantitative); the summary may only quote numbers
+  that are in the rows (above 10). Any failure leaves the rows untouched.
+- **Evaluation.** `tests/data/intent_eval.json` (30), `tests/data/followup_chains.json` (10 chains),
+  runner `app/evaluation/conversation.py`, CLI `scripts/evaluate_intents.py`. CI uses a scripted
+  model (checks data and scoring, not model quality); the live test skips without Ollama.
+- **Not verified here**: migration 0006_day6 and the PostgreSQL repository were not run against a live
+  database in this session (only the generated SQL and the in-memory twin were exercised).
+## Day 6 Track B: OIDC, scheduler worker and drift detection
+
+- **OIDC** (`app/adapters/identity/oidc.py`, Authlib + joserfc): authorization code flow with
+  PKCE (S256), `state` and `nonce`. The ID token is accepted only when its signature verifies
+  against the provider's JWKS with an asymmetric algorithm (so `alg: none` and HS256-signed-with-the-public-key
+  are refused) and `iss`, `aud` (plus `azp` when there are several audiences), `exp`, `nbf`, `sub`
+  and `nonce` are valid. JWKS is cached and refetched at most every 30 s on an unknown key id.
+  Discovery's `issuer` must equal the configured one. https is required unless
+  `OIDC_ALLOW_INSECURE` (Keycloak demo). The token exchange is a plain httpx call: Authlib 1.8's own
+  client rides on `httpx2`, which cannot share a transport with the rest of the app. Authlib builds
+  the authorization URL and the PKCE challenge.
+- **Same session**: `AuthService.login_external` shares `_finish_external` with LDAP login. The role
+  comes from `identity_mappings` for source `oidc`, re-applied at every login (a removed group
+  changes or removes the role at the next login; no matching mapping refuses the login). The account
+  is provisioned with `auth_source='oidc'` and no password, local names are never taken over,
+  disabled accounts stay disabled. Every failure is the same generic 401; the reason goes to the audit log.
+- **State**: only the SHA-256 of `state` is stored, with the nonce and PKCE verifier, in
+  `oidc_login_states`. It is deleted atomically on first use (`DELETE ... RETURNING`), expires after
+  10 minutes and is capped at 10 000 pending logins. The raw state also travels in an HttpOnly
+  `SameSite=Lax` cookie that the callback must match (login CSRF). Lax, not Strict, because the
+  browser returns from the provider on a cross-site navigation. An in-memory store exists for
+  single-process use.
+- **Known limit**: the local username is the casefolded `preferred_username` claim and the OIDC
+  `sub` is not stored, so a provider that recycles usernames could hand an old account to a new
+  person. Keep usernames unique and immutable at the provider, or add a subject column later.
+- **Shared adapter contract**: `tests/support/identity_contract.py` runs against LDAP (ldap3 mock
+  server) and OIDC (local fake IdP with real RSA keys, `tests/support/fake_idp.py`), both through
+  `VerifiedIdentity` (`app/ports/identity.py`).
+- **Scheduler**: jobs live in `scheduled_jobs` (migration `0006_day6`, which also carries
+  the drift and OIDC-state tables). APScheduler is the engine,
+  not the store: one interval job polls the table, claims due slots and runs each in its thread
+  pool. A slot is a row in `job_leases` keyed `(job_id, slot)`. The claim moves `next_run_at` under a
+  row lock and inserts the lease in one transaction, so two workers never run one slot. Missed slots
+  coalesce into one catch-up run after downtime. A worker that dies mid-run leaves a `running` lease
+  that expires and is taken over (at-least-once; drift reports are unique per slot, so a retry stores
+  no duplicate). There is no lease heartbeat: keep `SCHEDULER_LEASE_SECONDS` above the longest run.
+- **Runs as the owner, fail closed**: the owner's context is re-read for every slot. A missing,
+  disabled or locked owner, or one without `manage_profiling` or project access, pauses the job
+  (`paused_reason`) and runs nothing. Re-saving the schedule re-activates it under the saver. Audit
+  events: `scheduled_job_run`, `scheduled_job_paused`, `profiling_schedule_set`,
+  `profiling_schedule_removed`, `drift_draft_created`. Schedules are cron with a 15 minute minimum gap.
+- **Drift** (`app/semantic/drift.py`): only tables and columns the deployed MDL maps are compared
+  (new unmodelled tables are not drift): `table_removed`, `column_removed`, `column_added`,
+  `type_changed` (using the MDL's type-compatibility groups, so `int4` vs `integer` is not drift).
+  A report is stored on every run, including "no drift". `POST .../draft` applies a report's findings
+  to the MDL revision it compared and saves a new `pending` revision, linked to the report in the same
+  transaction (one draft per report). If a calculated column, metric or relationship still depends on
+  something removed it answers 409 and saves nothing.
+- **Verified**: the scheduler tables of the Day 6 migration applied on a scratch Postgres 16; lease races
+  (8 threads), takeover, report idempotency, one draft per report and one-time OIDC state ran against
+  it (`tests/test_scheduler_live.py`, needs `METADATA_APP_DSN`). Keycloak was not started here, so
+  `tests/test_oidc_live.py` and the realm import are untested against a real Keycloak.

@@ -135,6 +135,28 @@ class QdrantVectorStoreAdapter(VectorStorePort):
             return
         self._raise_for_status(response)
 
+    def delete_records(
+        self, project_id: str, model_version: str, record_ids: Sequence[str]
+    ) -> None:
+        if not record_ids:
+            return
+        response = self._client.post(
+            f"/collections/{self._collection}/points/delete",
+            params={"wait": "true"},
+            json={
+                "filter": {
+                    "must": [
+                        {"key": "project_id", "match": {"value": project_id}},
+                        {"key": "model_version", "match": {"value": model_version}},
+                        {"has_id": list(record_ids)},
+                    ]
+                }
+            },
+        )
+        if response.status_code == 404:
+            return
+        self._raise_for_status(response)
+
     def close(self) -> None:
         self._client.close()
 

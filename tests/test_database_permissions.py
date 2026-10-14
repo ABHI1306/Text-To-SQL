@@ -267,7 +267,7 @@ def test_day2_authenticated_setup_api_end_to_end(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("JWT_SECRET", "integration-test-jwt-secret-with-32-bytes")
     monkeypatch.setenv("CONNECTION_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    monkeypatch.setenv("DB_HOST_ALLOWLIST", "demo-db")
+    monkeypatch.setenv("DB_HOST_ALLOWLIST", credentials["host"])
     service = AuthService(
         repository,
         jwt_secret="integration-test-jwt-secret-with-32-bytes",

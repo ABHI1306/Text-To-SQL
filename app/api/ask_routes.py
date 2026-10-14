@@ -12,7 +12,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.metadata.governance import PostgresGovernanceRepository
+from app.adapters.metadata.knowledge import PostgresKnowledgeRepository
 from app.adapters.metadata.postgres import PostgresMetadataRepository
+from app.adapters.metadata.threads import PostgresThreadStore
 from app.agent.factory import NoDeployedModel, build_ask_service, load_deployed_mdl
 from app.agent.service import AskEvent, AskService
 from app.api.dependencies import (
@@ -24,6 +26,7 @@ from app.api.dependencies import (
 )
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
+from app.config import get_settings
 from app.core.types import Principal
 from app.domain.mdl import Mdl
 
@@ -44,6 +47,7 @@ class AskQuestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
+    thread_id: UUID | None = None
 
 
 class _Prepared:
@@ -76,7 +80,12 @@ def _prepare(
     except NoDeployedModel as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     _, dsn, ca_certificate = _project_connection_details(repository, project_id)
-    service, close = build_ask_service(dsn, ca_certificate, audit=audit)
+    settings = get_settings()
+    service, close = build_ask_service(
+        dsn, ca_certificate, audit=audit,
+        threads=PostgresThreadStore(settings.metadata_database_url),
+        knowledge=PostgresKnowledgeRepository(settings.metadata_database_url),
+    )
     return _Prepared(service, mdl, version, close)
 
 
@@ -105,6 +114,7 @@ def ask_project_question(
             policies,
             body.question,
             include_compiled="rerun_sql" in context.capabilities,
+            thread_id=str(body.thread_id) if body.thread_id else None,
         )
     finally:
         prepared.close()
@@ -125,6 +135,11 @@ def ask_project_question(
         "truncated": result.truncated,
         "policy_context": result.policy_context,
         "source": "postgresql",
+        "thread_id": result.thread_id,
+        "intent": result.intent,
+        "message": result.reply,
+        "summary": result.summary,
+        "chart": result.chart,
     }
     if "rerun_sql" in context.capabilities:
         response["sql"] = result.sql
@@ -154,6 +169,7 @@ def ask_project_question_stream(
                 for event in prepared.service.stream(
                     str(project_id), prepared.version, prepared.mdl, principal, policies,
                     body.question, include_compiled=include_compiled,
+                    thread_id=str(body.thread_id) if body.thread_id else None,
                 )
             )
         except Exception:  # noqa: BLE001 - fail closed into a typed failure

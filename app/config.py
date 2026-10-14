@@ -26,6 +26,7 @@ class Settings:
     login_lockout_seconds: int
     sql_model: str
     embedding_model: str = "nomic-embed-text:latest"
+    small_model: str = ""
     ldap_uri: str = ""
     ldap_start_tls: bool = False
     ldap_allow_insecure: bool = False
@@ -37,6 +38,19 @@ class Settings:
     ldap_group_base_dn: str = ""
     ldap_group_filter: str = "(member={dn})"
     ldap_attribute_map: str = ""
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    oidc_discovery_url: str = ""
+    oidc_scopes: str = "openid profile email"
+    oidc_username_claim: str = "preferred_username"
+    oidc_groups_claim: str = "groups"
+    oidc_attribute_map: str = ""
+    oidc_allow_insecure: bool = False
+    scheduler_poll_seconds: int = 15
+    scheduler_lease_seconds: int = 300
+    scheduler_worker_id: str = ""
 
 
 def get_settings() -> Settings:
@@ -68,6 +82,7 @@ def get_settings() -> Settings:
         login_max_failures=int(os.getenv("LOGIN_MAX_FAILURES", "5")),
         login_lockout_seconds=int(os.getenv("LOGIN_LOCKOUT_SECONDS", "900")),
         sql_model=os.getenv("SQL_MODEL", "llama3:latest"),
+        small_model=os.getenv("SMALL_MODEL", ""),
         embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text:latest"),
         ldap_uri=os.getenv("LDAP_URI", ""),
         ldap_start_tls=os.getenv("LDAP_START_TLS", "").lower() in {"1", "true", "yes"},
@@ -80,6 +95,19 @@ def get_settings() -> Settings:
         ldap_group_base_dn=os.getenv("LDAP_GROUP_BASE_DN", ""),
         ldap_group_filter=os.getenv("LDAP_GROUP_FILTER", "(member={dn})"),
         ldap_attribute_map=os.getenv("LDAP_ATTRIBUTE_MAP", ""),
+        oidc_issuer=os.getenv("OIDC_ISSUER", ""),
+        oidc_client_id=os.getenv("OIDC_CLIENT_ID", ""),
+        oidc_client_secret=os.getenv("OIDC_CLIENT_SECRET", ""),
+        oidc_redirect_uri=os.getenv("OIDC_REDIRECT_URI", ""),
+        oidc_discovery_url=os.getenv("OIDC_DISCOVERY_URL", ""),
+        oidc_scopes=os.getenv("OIDC_SCOPES", "openid profile email"),
+        oidc_username_claim=os.getenv("OIDC_USERNAME_CLAIM", "preferred_username"),
+        oidc_groups_claim=os.getenv("OIDC_GROUPS_CLAIM", "groups"),
+        oidc_attribute_map=os.getenv("OIDC_ATTRIBUTE_MAP", ""),
+        oidc_allow_insecure=os.getenv("OIDC_ALLOW_INSECURE", "").lower() in {"1", "true", "yes"},
+        scheduler_poll_seconds=int(os.getenv("SCHEDULER_POLL_SECONDS", "15")),
+        scheduler_lease_seconds=int(os.getenv("SCHEDULER_LEASE_SECONDS", "300")),
+        scheduler_worker_id=os.getenv("SCHEDULER_WORKER_ID", ""),
     )
 
 

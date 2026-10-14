@@ -13,6 +13,9 @@ from app.agent.service import AskService
 from app.audit.service import AuditService
 from app.config import get_settings
 from app.domain.mdl import Mdl
+from app.knowledge.service import KnowledgeService
+from app.ports.knowledge import KnowledgeRepoPort
+from app.ports.threads import ThreadStorePort
 
 
 class MdlSource(Protocol):
@@ -42,12 +45,16 @@ def build_ask_service(
     ca_certificate: str | None,
     *,
     audit: AuditService | None = None,
+    threads: ThreadStorePort | None = None,
+    knowledge: KnowledgeRepoPort | None = None,
 ) -> tuple[AskService, Callable[[], None]]:
     """The service and a function that releases its connections."""
     settings = get_settings()
     vector_store = QdrantVectorStoreAdapter(settings.qdrant_url)
+    embedder = OllamaEmbedderAdapter(settings.ollama_url, settings.embedding_model)
+    small_llm = OllamaLLMAdapter(settings.ollama_url, settings.small_model or settings.sql_model)
     service = AskService(
-        OllamaEmbedderAdapter(settings.ollama_url, settings.embedding_model),
+        embedder,
         vector_store,
         OllamaLLMAdapter(settings.ollama_url, settings.sql_model),
         PostgresWarehouseAdapter(
@@ -58,5 +65,9 @@ def build_ask_service(
         ),
         audit=audit,
         max_rows=settings.warehouse_max_rows,
+        small_llm=small_llm,
+        summary_llm=small_llm,
+        threads=threads,
+        knowledge=KnowledgeService(knowledge, embedder, vector_store) if knowledge else None,
     )
     return service, vector_store.close

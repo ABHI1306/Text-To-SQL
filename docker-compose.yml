@@ -95,11 +95,20 @@ services:
       context: .
       target: base
     command: ["uv", "run", "--no-sync", "python", "-m", "app.worker"]
+    restart: unless-stopped
     environment:
       APP_ENV: development
       LOG_LEVEL: INFO
+      METADATA_DATABASE_URL: postgresql+psycopg://text2sql_app:${METADATA_APP_PASSWORD}@metadata-db:5432/metadata
+      CONNECTION_ENCRYPTION_KEY: ${CONNECTION_ENCRYPTION_KEY:-}
+      WAREHOUSE_STATEMENT_TIMEOUT_MS: ${WAREHOUSE_STATEMENT_TIMEOUT_MS:-10000}
+      SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-15}
+      SCHEDULER_LEASE_SECONDS: ${SCHEDULER_LEASE_SECONDS:-300}
+      SCHEDULER_WORKER_ID: ${SCHEDULER_WORKER_ID:-}
     depends_on:
       metadata-db:
+        condition: service_healthy
+      demo-db:
         condition: service_healthy
     networks: [local]
 

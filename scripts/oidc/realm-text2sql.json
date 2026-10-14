@@ -1,0 +1,112 @@
+{
+  "realm": "text2sql",
+  "enabled": true,
+  "displayName": "Text-to-SQL demo",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "attributes": {
+    "_comment": "Demo realm for the identity-demo profile. Passwords below are for local demos only."
+  },
+  "groups": [
+    { "name": "text2sql-analysts" },
+    { "name": "text2sql-dbas" }
+  ],
+  "clients": [
+    {
+      "clientId": "text2sql-api",
+      "name": "Text-to-SQL API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${OIDC_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8000/api/v1/auth/oidc/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": ["profile", "email"],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "region",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "region",
+            "claim.name": "region",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "department",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "department",
+            "claim.name": "department",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "asha",
+      "email": "asha@example.org",
+      "firstName": "Asha",
+      "lastName": "Rao",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "region": ["West"], "department": ["sales"] },
+      "groups": ["/text2sql-analysts"],
+      "credentials": [{ "type": "password", "value": "demo-asha-password", "temporary": false }]
+    },
+    {
+      "username": "ravi",
+      "email": "ravi@example.org",
+      "firstName": "Ravi",
+      "lastName": "Menon",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "region": ["South"], "department": ["ops"] },
+      "groups": ["/text2sql-dbas"],
+      "credentials": [{ "type": "password", "value": "demo-ravi-password", "temporary": false }]
+    },
+    {
+      "username": "mina",
+      "email": "mina@example.org",
+      "firstName": "Mina",
+      "lastName": "Das",
+      "enabled": true,
+      "emailVerified": true,
+      "groups": [],
+      "credentials": [{ "type": "password", "value": "demo-mina-password", "temporary": false }]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from app.core.types import JsonValue, VectorMatch
 from app.domain.mdl import Mdl, MdlColumn, MdlModel, Relationship
 from app.ports.embedder import EmbedderPort
+from app.ports.knowledge import Instruction, KnowledgeLookup, SqlPair
 from app.ports.vector_store import VectorStorePort
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
@@ -26,6 +28,8 @@ class RetrievalResult:
     models: tuple[RetrievedModel, ...]
     relationships: tuple[Relationship, ...]
     matches: tuple[VectorMatch, ...]
+    pairs: tuple[SqlPair, ...] = ()
+    instructions: tuple[Instruction, ...] = ()
 
 
 class RetrievalService:
@@ -36,6 +40,7 @@ class RetrievalService:
         *,
         keyword_weight: float = 0.35,
         relationship_expansion: bool = True,
+        knowledge: KnowledgeLookup | None = None,
     ) -> None:
         if not 0 <= keyword_weight <= 1:
             raise ValueError("keyword_weight must be between 0 and 1")
@@ -43,6 +48,7 @@ class RetrievalService:
         self._vector_store = vector_store
         self._keyword_weight = keyword_weight
         self._relationship_expansion = relationship_expansion
+        self._knowledge = knowledge
 
     def retrieve(
         self,
@@ -96,10 +102,19 @@ class RetrievalService:
             for relationship in mdl.relationships
             if set(relationship.models).issubset({model.name for model in models})
         )
+        pairs: tuple[SqlPair, ...] = ()
+        instructions: tuple[Instruction, ...] = ()
+        if self._knowledge is not None:
+            # Knowledge is advisory: when it is unavailable schema retrieval still works.
+            with contextlib.suppress(Exception):
+                context = self._knowledge.lookup(project_id, vectors[0])
+                pairs, instructions = context.pairs, context.instructions
         return RetrievalResult(
             models=models,
             relationships=relationships,
             matches=tuple(match for _, match in ranked),
+            pairs=pairs,
+            instructions=instructions,
         )
 
     def _hybrid_rank(

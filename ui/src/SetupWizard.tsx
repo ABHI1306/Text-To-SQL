@@ -72,12 +72,13 @@ export function SetupWizard({
   existingProject?: Project
   draft: Partial<ConnectionDraft>
   onDraftChange: (draft: Partial<ConnectionDraft>) => void
-  onProjectCreated: () => void
+  onProjectCreated: (projectId: string) => void
   /** Called after the draft model is saved, so the app can open the model editor. */
   onModelSaved?: () => void
 }) {
   const [projectId, setProjectId] = useState(existingProject?.id ?? '')
   const [step, setStep] = useState<SetupStep>('connect')
+  const [sourceChosen, setSourceChosen] = useState(false)
   const [tables, setTables] = useState<CatalogTable[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -212,7 +213,7 @@ export function SetupWizard({
       const project = (await response.json()) as Project
       setProjectId(project.id)
       applyCatalog(await loadCatalog(project.id, 1, ''))
-      onProjectCreated()
+      onProjectCreated(project.id)
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not create the project')
     } finally {
@@ -271,7 +272,7 @@ export function SetupWizard({
       setDraftJson(JSON.stringify(saved, null, 2))
       setStep('complete')
       setNotice(`Semantic model revision ${saved.revision ?? 'saved'} is ready for review.`)
-      onProjectCreated()
+      onProjectCreated(projectId)
       onModelSaved?.()
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not save the semantic model')
@@ -304,6 +305,29 @@ export function SetupWizard({
   }
 
   const filteredTables = tables
+
+  if (step === 'connect' && !projectId && !sourceChosen) {
+    return (
+      <section className="setup-content" aria-label="Setup project">
+        <h1>Setup project</h1>
+        <p className="setup-lede">
+          Connect a database, choose tables, then define how they relate. After that you can
+          deploy the model and start asking questions.
+        </p>
+        <h2 className="setup-source-heading">Connect a data source</h2>
+        <div className="setup-sources">
+          <button className="setup-source" onClick={() => setSourceChosen(true)} type="button">
+            <span className="setup-source-icon" aria-hidden="true">Pg</span>
+            <span>
+              <b>PostgreSQL</b>
+              <br />
+              <span className="setup-source-note">Versions 12 to 16, read-only account</span>
+            </span>
+          </button>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="setup-content" aria-label="Connect and model setup">

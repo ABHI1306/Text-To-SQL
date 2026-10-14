@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Text-to-SQL Platform API
-  version: 0.5.0
+  version: 0.6.0
   description: Local authentication, PostgreSQL setup, semantic deployment, role, compile-preview, row-policy and audit APIs.
 servers:
   - url: /api/v1
@@ -28,6 +28,65 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
         "401":
+          $ref: "#/components/responses/Error"
+  /auth/oidc/login:
+    get:
+      operationId: oidcLogin
+      description: >
+        Starts OpenID Connect sign-in (authorization code flow with PKCE, state and nonce) and
+        redirects to the identity provider. Sets a short-lived HttpOnly SameSite=Lax
+        `oidc_state` cookie that the callback must match. 404 when OIDC is not configured.
+      security: []
+      responses:
+        "302":
+          description: Redirect to the identity provider.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      description: >
+        Completes OIDC sign-in. The state is single-use and expires after ten minutes; the ID
+        token is validated (signature via JWKS, iss, aud, exp, nonce) and the person's groups are
+        mapped to a role through the `oidc` identity mappings, re-evaluated on every login. The
+        session issued is the same as `/auth/login`.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: error
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Signed in; refresh token is set in an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /auth/refresh:
     post:
@@ -372,8 +431,14 @@ paths:
         Same pipeline as `/query`, as server-sent events in this order (steps repeat on
         correction): retrieval, sql_candidate, compilation, validation, correction, rows, then
         done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts
-        holding `rerun_sql`. `clarification` and `suggestions` events are defined for the
-        conversation work and are not emitted yet.
+        holding `rerun_sql`. `rewrite` (follow-ups only), `clarification` and `answer` replace the SQL steps when the
+        message needs a question back or no query; `suggestions` is defined for the
+        conversation work and is not emitted yet. `retrieval` lists the approved SQL pairs
+        (`{id, question}`) and active instructions (`{id, text}`) given to the model. After
+        `rows`, `summary` (`{text}`, only numbers that are in the rows) and `chart`
+        (`{spec}`, a Vega-Lite spec validated against the result columns, bound to the dataset
+        named `rows`) are sent when the small model produced valid ones; they are optional and
+        never replace or delay the rows.
       requestBody:
         required: true
         content:
@@ -609,6 +674,237 @@ paths:
       responses:
         "200":
           description: Role project access replaced.
+  /capabilities:
+    get:
+      operationId: listCapabilities
+      description: Capability catalogue for the custom role editor. Needs `manage_roles`.
+      responses:
+        "200":
+          description: Sorted capability names.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: string
+        "403":
+          $ref: "#/components/responses/Error"
+  /users/{user_id}/unlock:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: unlockUser
+      description: Clears the failed-login lockout. Audited as `user_unlocked`. Needs `manage_users`.
+      responses:
+        "200":
+          description: Account unlocked.
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /users/{user_id}/reset-password:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: resetUserPassword
+      description: >
+        Sets a temporary password for a local account, revokes its sessions and requires a change
+        at next sign-in. Audited as `user_password_reset`. Needs `manage_users`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  minLength: 12
+                  format: password
+      responses:
+        "200":
+          description: Password reset; the user must change it at next sign-in.
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/knowledge/instructions:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listInstructions
+      description: Needs `manage_knowledge`.
+      responses:
+        "200":
+          description: Instructions of the project.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeInstruction"
+    post:
+      operationId: createInstruction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeInstructionRequest"
+      responses:
+        "201":
+          description: Instruction created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeInstruction"
+  /projects/{project_id}/knowledge/instructions/{instruction_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: instruction_id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: updateInstruction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeInstructionRequest"
+      responses:
+        "200":
+          description: Instruction updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeInstruction"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteInstruction
+      responses:
+        "204":
+          description: Instruction deleted.
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/knowledge/sql-pairs:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listSqlPairs
+      responses:
+        "200":
+          description: Approved question and SQL pairs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SqlPair"
+    post:
+      operationId: createSqlPair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SqlPairRequest"
+      responses:
+        "201":
+          description: Pair created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SqlPair"
+  /projects/{project_id}/knowledge/sql-pairs/{pair_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: pair_id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: deleteSqlPair
+      responses:
+        "204":
+          description: Pair deleted.
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/knowledge/proposals:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listPairProposals
+      responses:
+        "200":
+          description: Pending proposals, each with the nearest approved pair.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PairProposalItem"
+  /projects/{project_id}/knowledge/proposals/{proposal_id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: proposal_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: approveProposal
+      responses:
+        "200":
+          description: Proposal approved and promoted to an SQL pair.
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/knowledge/proposals/{proposal_id}/reject:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: proposal_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: rejectProposal
+      responses:
+        "200":
+          description: Proposal rejected.
+        "404":
+          $ref: "#/components/responses/Error"
   /sample-projects:
     get:
       operationId: listSampleProjectTemplates
@@ -769,6 +1065,260 @@ paths:
                 $ref: "#/components/schemas/AuditPage"
         "422":
           $ref: "#/components/responses/Error"
+  /projects/{project_id}/knowledge/instructions:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listInstructions
+      description: Requires `manage_knowledge`. Instructions of this project only.
+      responses:
+        "200":
+          description: Instructions, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Instruction"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createInstruction
+      description: >
+        Requires `manage_knowledge`. Active instructions are embedded and added, as delimited
+        data, to the generation and correction prompts. Writes an `instruction_created` audit event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 1000 }
+                active: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Instruction stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instruction"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/instructions/{instruction_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: instruction_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateInstruction
+      description: Requires `manage_knowledge`. Audited as `instruction_updated`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string, minLength: 1, maxLength: 1000 }
+                active: { type: boolean }
+      responses:
+        "200":
+          description: Instruction updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instruction"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteInstruction
+      description: Requires `manage_knowledge`. Audited as `instruction_deleted`.
+      responses:
+        "204":
+          description: Instruction deleted.
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/sql-pairs:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listSqlPairs
+      description: Requires `manage_knowledge`. Approved pairs only; proposals are under `/knowledge/proposals`.
+      responses:
+        "200":
+          description: Approved question and logical-SQL pairs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SqlPair"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createSqlPair
+      description: >
+        Requires `approve_pairs`, because a pair added by hand is approved immediately. The SQL must
+        compile against the deployed semantic model (logical names only), otherwise 422
+        `INVALID_SQL`. A duplicate is 409. Audited as `sql_pair_created`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, logical_sql]
+              properties:
+                question: { type: string, minLength: 1, maxLength: 2000 }
+                logical_sql: { type: string, minLength: 1, maxLength: 20000 }
+      responses:
+        "201":
+          description: Pair approved and indexed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SqlPair"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/sql-pairs/{pair_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: pair_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: deleteSqlPair
+      description: Requires `manage_knowledge`. Audited as `sql_pair_deleted`.
+      responses:
+        "204":
+          description: Pair deleted and removed from the index.
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/feedback:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: giveFeedback
+      description: >
+        Requires `give_feedback`. A thumbs-up proposes the question and its logical SQL as a pair
+        (status `proposed`, not used by retrieval until approved); a thumbs-down is only recorded.
+        The SQL must compile against the deployed model. Audited as `feedback_given` and, for a
+        new proposal, `sql_pair_proposed`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating, question, logical_sql]
+              description: Give `message_id` or `thread_id` (or both).
+              properties:
+                message_id: { type: string, maxLength: 100 }
+                thread_id: { type: string, format: uuid }
+                rating: { type: string, enum: [up, down] }
+                question: { type: string, minLength: 1, maxLength: 2000 }
+                logical_sql: { type: string, minLength: 1, maxLength: 20000 }
+      responses:
+        "201":
+          description: Feedback stored; `proposal` is the pair now awaiting review, or null.
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/proposals:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProposals
+      description: Requires `approve_pairs`. Each proposal carries `nearest_approved`, the closest approved pair (or null).
+      responses:
+        "200":
+          description: Proposed pairs, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: "#/components/schemas/SqlPair"
+                    - type: object
+                      properties:
+                        nearest_approved:
+                          nullable: true
+                          allOf:
+                            - $ref: "#/components/schemas/SqlPair"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/proposals/{pair_id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: pair_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: approveProposal
+      description: Requires `approve_pairs`. The SQL is re-checked against the current model. Audited as `sql_pair_approved`.
+      responses:
+        "200":
+          description: Pair approved and indexed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SqlPair"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /projects/{project_id}/knowledge/proposals/{pair_id}/reject:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: pair_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: rejectProposal
+      description: Requires `approve_pairs`. Audited as `sql_pair_rejected` (with the reason).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Proposal rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SqlPair"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /threads:
     post:
       operationId: createThread
@@ -815,6 +1365,162 @@ paths:
       responses:
         "501":
           $ref: "#/components/responses/Error"
+  /projects/{project_id}/profiling-schedule:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProfilingSchedule
+      description: The project's scheduled profiling and drift-detection job. Needs `manage_profiling`.
+      responses:
+        "200":
+          description: The schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfilingSchedule"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: setProfilingSchedule
+      description: >
+        Creates or replaces the schedule. The job runs as the caller; if that account is later
+        disabled or loses access the job pauses instead of running. Needs `manage_profiling`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schedule]
+              additionalProperties: false
+              properties:
+                schedule:
+                  type: string
+                  description: Five-field cron expression, at most every 15 minutes.
+                  example: "0 3 * * *"
+                timezone:
+                  type: string
+                  default: UTC
+      responses:
+        "200":
+          description: The saved schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfilingSchedule"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteProfilingSchedule
+      responses:
+        "204":
+          description: Schedule removed.
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/drift-reports:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listDriftReports
+      description: >
+        Reports comparing the live catalog with the deployed MDL, newest first (including runs
+        that found no drift). Needs `manage_profiling`.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          description: The `nextCursor` of the previous page.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: A page of reports.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DriftReport"
+                  nextCursor:
+                    type: string
+                    format: date-time
+                    nullable: true
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /projects/{project_id}/drift-reports/{report_id}/draft:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: createDraftFromDrift
+      description: >
+        Applies the report's findings to the MDL revision it compared and saves the result as a
+        new draft revision (one per report). 409 when the report found no drift, already has a
+        draft, or the drift cannot be applied without breaking calculated columns, metrics or
+        relationships. Needs `edit_mdl`.
+      responses:
+        "201":
+          description: The new draft revision.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                    format: uuid
+                  reportId:
+                    type: string
+                    format: uuid
+                  revision:
+                    type: integer
+                  baseRevision:
+                    type: integer
+                  status:
+                    type: string
+                    enum: [draft]
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -834,6 +1540,26 @@ components:
         type: string
         format: uuid
   schemas:
+    Instruction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string }
+        active: { type: boolean }
+        created_by: { type: string, format: uuid, nullable: true }
+        updated_at: { type: string, format: date-time }
+    SqlPair:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        question: { type: string }
+        logical_sql: { type: string }
+        status: { type: string, enum: [proposed, approved, rejected] }
+        source: { type: string, enum: [manual, feedback] }
+        proposed_by: { type: string, format: uuid, nullable: true }
+        decided_by: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time, nullable: true }
     CompileError:
       type: object
       required: [code, message]
@@ -936,6 +1662,73 @@ components:
         testUserId:
           type: string
           format: uuid
+    KnowledgeInstructionRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    KnowledgeInstruction:
+      type: object
+      required: [id, text]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    SqlPairRequest:
+      type: object
+      required: [question, sql]
+      properties:
+        question:
+          type: string
+        sql:
+          type: string
+    SqlPair:
+      type: object
+      required: [id, question, sql]
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        sql:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    PairProposal:
+      type: object
+      required: [id, question, sql]
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        sql:
+          type: string
+        status:
+          type: string
+        proposed_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+    PairProposalItem:
+      description: The proposal fields, or `{proposal, nearest_approved}`; the UI accepts both shapes.
+      allOf:
+        - $ref: "#/components/schemas/PairProposal"
+        - type: object
+          properties:
+            nearest_approved:
+              oneOf:
+                - $ref: "#/components/schemas/SqlPair"
+                - type: "null"
     AuditPage:
       type: object
       required: [items, nextCursor]
@@ -1222,6 +2015,99 @@ components:
           format: uuid
         title:
           type: string
+    ProfilingSchedule:
+      type: object
+      required: [id, projectId, kind, schedule, timezone, status, nextRunAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        ownerId:
+          type: string
+          format: uuid
+          nullable: true
+        kind:
+          type: string
+          enum: [profile_drift]
+        schedule:
+          type: string
+        timezone:
+          type: string
+        status:
+          type: string
+          enum: [active, paused]
+        pausedReason:
+          type: string
+          nullable: true
+          description: For example owner_unavailable or owner_lacks_access.
+        nextRunAt:
+          type: string
+          format: date-time
+        lastRunAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastStatus:
+          type: string
+          nullable: true
+          enum: [succeeded, failed, skipped]
+    DriftFinding:
+      type: object
+      required: [kind, table, model]
+      properties:
+        kind:
+          type: string
+          enum: [table_removed, column_removed, column_added, type_changed]
+        table:
+          type: string
+        model:
+          type: string
+        column:
+          type: string
+        expected:
+          type: string
+          description: Type recorded in the MDL.
+        actual:
+          type: string
+          description: Type found in the database.
+        isPrimaryKey:
+          type: boolean
+    DriftReport:
+      type: object
+      required: [id, projectId, mdlVersion, hasDrift, summary, findings, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        mdlVersion:
+          type: integer
+          description: The deployed revision that was compared.
+        hasDrift:
+          type: boolean
+        summary:
+          type: object
+          additionalProperties:
+            type: integer
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriftFinding"
+        draftMdlVersion:
+          type: integer
+          nullable: true
+        createdBy:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
     Error:
       type: object
       properties:

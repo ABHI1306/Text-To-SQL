@@ -5,6 +5,7 @@ from types import FrameType
 
 from app.config import get_settings
 from app.logging_config import configure_logging
+from app.worker.runtime import build_scheduler
 
 
 def main() -> None:
@@ -15,13 +16,17 @@ def main() -> None:
 
     def request_shutdown(signum: int, frame: FrameType | None) -> None:
         del frame
-        logger.info("Worker placeholder received shutdown signal", extra={"signal": signum})
+        logger.info("Worker received shutdown signal", extra={"signal": signum})
         shutdown.set()
 
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
-    logger.info("Worker placeholder started; no jobs are registered yet")
+    scheduler = build_scheduler(settings)
+    scheduler.start()
+    logger.info("Worker started; jobs are read from the metadata database")
     shutdown.wait()
+    scheduler.stop(wait=True)
+    logger.info("Worker stopped")
 
 
 if __name__ == "__main__":

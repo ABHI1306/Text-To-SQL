@@ -740,12 +740,26 @@ class PostgresMetadataRepository:
             cursor.execute(
                 """
                 SELECT users.id, users.username, users.status, users.auth_source,
+                       users.locked_until, users.must_change_password,
                        roles.name AS role
                 FROM users JOIN roles ON roles.id = users.role_id
                 ORDER BY users.username
                 """
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def unlock_user(self, user_id: str) -> None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE users SET failed_login_count = 0, failure_window_started_at = NULL,
+                    locked_until = NULL
+                WHERE id = %s::uuid
+                """,
+                (user_id,),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError("User does not exist")
 
     def set_user_role(self, user_id: str, role_name: str) -> None:
         with self._connect() as connection, connection.cursor() as cursor:

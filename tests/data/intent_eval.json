@@ -1,0 +1,155 @@
+{
+ "description": "Routing set: data_question, clarify (about the data but too vague to query) or respond (chat). Messages are unique across the evaluation files.",
+ "cases": [
+  {
+   "id": "intent-01",
+   "message": "How many orders are in each status?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-02",
+   "message": "Which five customers generated the most order revenue?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-03",
+   "message": "Show monthly order counts for this year.",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-04",
+   "message": "List customers who have never placed an order.",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-05",
+   "message": "What is the average order value by region?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-06",
+   "message": "Which products have the highest total quantity sold?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-07",
+   "message": "Show payments collected by month and payment method.",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-08",
+   "message": "Which shipments were delivered late?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-09",
+   "message": "What is the total value of products currently in inventory?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-10",
+   "message": "How many orders used each coupon?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-11",
+   "message": "Compare order counts across customer regions and statuses.",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-12",
+   "message": "Find products that have never been ordered.",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-13",
+   "message": "What was the refund amount in March 2024?",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-14",
+   "message": "Top 10 categories by revenue last quarter",
+   "intent": "data_question"
+  },
+  {
+   "id": "intent-15",
+   "message": "Show me the numbers",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-16",
+   "message": "What about the trend?",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-17",
+   "message": "Which ones are the best?",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-18",
+   "message": "How are we doing?",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-19",
+   "message": "Give me a report",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-20",
+   "message": "Compare them",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-21",
+   "message": "Show sales",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-22",
+   "message": "Is it good?",
+   "intent": "clarify"
+  },
+  {
+   "id": "intent-23",
+   "message": "Hello!",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-24",
+   "message": "Hi there, who are you?",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-25",
+   "message": "Thanks, that was helpful.",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-26",
+   "message": "What can you help me with?",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-27",
+   "message": "Good morning",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-28",
+   "message": "Thank you so much",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-29",
+   "message": "What kind of questions can I ask you?",
+   "intent": "respond"
+  },
+  {
+   "id": "intent-30",
+   "message": "Bye for now",
+   "intent": "respond"
+  }
+ ]
+}

@@ -10,7 +10,7 @@ import pytest
 
 from app.agent.graph import AgentDeps, build_graph
 from tests.support.ecommerce_mdl import build_mdl, build_policies, build_principal
-from tests.test_agent_graph import FakeRetrieval, FakeWarehouse, ScriptedLlm, sql
+from tests.test_agent_graph import FakeRetrieval, FakeWarehouse, RoutingLlm, ScriptedLlm, sql
 
 CASES = json.loads((Path(__file__).parent / "data/redteam_cases.json").read_text())["cases"]
 
@@ -25,11 +25,12 @@ def run(case: dict[str, Any]) -> tuple[dict[str, Any], FakeWarehouse, ScriptedLl
     llm = ScriptedLlm(sql(reply) if not reply.startswith("Sure!") else reply)
     warehouse = FakeWarehouse()
     state = build_graph(
-        AgentDeps(mdl, 1, build_policies(), FakeRetrieval(), llm, warehouse)
+        AgentDeps(mdl, 1, build_policies(), FakeRetrieval(), llm, warehouse, small_llm=RoutingLlm())
     ).invoke(
         {
             "project_id": "p",
             "thread_id": "t",
+            "history": [],
             "question": case["question"],
             "principal": build_principal("west", {"region": "West"}),
         }

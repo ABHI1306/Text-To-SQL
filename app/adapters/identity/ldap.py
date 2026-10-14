@@ -17,6 +17,7 @@ from ldap3.utils.conv import escape_filter_chars
 
 from app.core.types import JsonValue
 from app.ports.directory import DirectoryIdentity, DirectoryUnavailable
+from app.ports.identity import IdentityUnavailable, VerifiedIdentity
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,18 @@ class LdapDirectory:
             dn=dn,
             groups=groups,
             attributes=self._mapped(attributes),
+        )
+
+    def verify(self, username: str, password: str) -> VerifiedIdentity | None:
+        """The shared identity-adapter shape (see tests/identity_contract.py)."""
+        try:
+            identity = self.authenticate(username, password)
+        except DirectoryUnavailable as error:
+            raise IdentityUnavailable(str(error)) from error
+        if identity is None:
+            return None
+        return VerifiedIdentity(
+            "ldap", identity.username, identity.dn, identity.groups, dict(identity.attributes)
         )
 
     def _find_user(self, username: str) -> tuple[str, Mapping[str, object]] | None:
