@@ -15,7 +15,7 @@ from app.audit.service import AuditService
 from app.auth.models import AuthContext
 from app.auth.service import hash_password
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["Admin"])
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]

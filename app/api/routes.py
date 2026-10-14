@@ -48,9 +48,7 @@ RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_reposit
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 CurrentContext = Annotated[AuthContext, Depends(get_current_context)]
 PasswordChangeContext = Annotated[AuthContext, Depends(get_password_change_context)]
-ManageConnectionContext = Annotated[
-    AuthContext, Depends(require_capability("manage_connection"))
-]
+ManageConnectionContext = Annotated[AuthContext, Depends(require_capability("manage_connection"))]
 EditMdlContext = Annotated[AuthContext, Depends(require_capability("edit_mdl"))]
 DeployMdlContext = Annotated[AuthContext, Depends(require_capability("deploy_mdl"))]
 AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question"))]
@@ -62,12 +60,18 @@ SAMPLE_PROJECT_TEMPLATES: dict[str, dict[str, object]] = {
     "ecommerce": {
         "name": "E-commerce sample",
         "tables": [
-            ("ecommerce", "customers"), ("ecommerce", "addresses"),
-            ("ecommerce", "categories"), ("ecommerce", "products"),
-            ("ecommerce", "orders"), ("ecommerce", "order_items"),
-            ("ecommerce", "payments"), ("ecommerce", "shipments"),
-            ("ecommerce", "reviews"), ("ecommerce", "coupons"),
-            ("ecommerce", "order_coupons"), ("ecommerce", "inventory"),
+            ("ecommerce", "customers"),
+            ("ecommerce", "addresses"),
+            ("ecommerce", "categories"),
+            ("ecommerce", "products"),
+            ("ecommerce", "orders"),
+            ("ecommerce", "order_items"),
+            ("ecommerce", "payments"),
+            ("ecommerce", "shipments"),
+            ("ecommerce", "reviews"),
+            ("ecommerce", "coupons"),
+            ("ecommerce", "order_coupons"),
+            ("ecommerce", "inventory"),
         ],
     },
     "human-resources": {
@@ -116,11 +120,25 @@ class AskQuestionRequest(BaseModel):
 
 _CAPABILITIES = frozenset(
     {
-        "ask_question", "give_feedback", "view_shared", "view_all_threads",
-        "rerun_sql", "manage_connection", "edit_mdl", "deploy_mdl",
-        "manage_knowledge", "approve_pairs", "manage_policies", "manage_profiling",
-        "create_dashboard", "schedule_question", "share", "run_eval",
-        "manage_users", "manage_roles", "view_audit",
+        "ask_question",
+        "give_feedback",
+        "view_shared",
+        "view_all_threads",
+        "rerun_sql",
+        "manage_connection",
+        "edit_mdl",
+        "deploy_mdl",
+        "manage_knowledge",
+        "approve_pairs",
+        "manage_policies",
+        "manage_profiling",
+        "create_dashboard",
+        "schedule_question",
+        "share",
+        "run_eval",
+        "manage_users",
+        "manage_roles",
+        "view_audit",
     }
 )
 
@@ -242,9 +260,9 @@ def _project_connection_details(
         "user": str(credentials["username"]),
         "password": str(credentials["password"]),
         "connect_timeout": "5",
-        "sslmode": "verify-full" if credentials["ssl_ca_certificate"] else (
-            "require" if project["ssl_enabled"] else "prefer"
-        ),
+        "sslmode": "verify-full"
+        if credentials["ssl_ca_certificate"]
+        else ("require" if project["ssl_enabled"] else "prefer"),
     }
     dsn = make_conninfo(**parameters)
     certificate = credentials["ssl_ca_certificate"]
@@ -260,9 +278,7 @@ def _require_project_access(context: AuthContext, project_id: UUID) -> None:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
-def _require_delegable_capabilities(
-    context: AuthContext, capabilities: list[str]
-) -> None:
+def _require_delegable_capabilities(context: AuthContext, capabilities: list[str]) -> None:
     if not set(capabilities) <= context.capabilities:
         raise HTTPException(
             status_code=403,
@@ -270,12 +286,11 @@ def _require_delegable_capabilities(
         )
 
 
-def _require_delegable_projects(
-    context: AuthContext, project_ids: list[UUID]
-) -> None:
-    if context.role_name != "DBA" and not {
-        str(project_id) for project_id in project_ids
-    } <= context.project_ids:
+def _require_delegable_projects(context: AuthContext, project_ids: list[UUID]) -> None:
+    if (
+        context.role_name != "DBA"
+        and not {str(project_id) for project_id in project_ids} <= context.project_ids
+    ):
         raise HTTPException(
             status_code=403,
             detail="Cannot grant access to projects the current user cannot access",
@@ -298,7 +313,7 @@ def _serialize_draft(draft: ProfiledDraft) -> dict[str, object]:
     }
 
 
-@router.post("/auth/login")
+@router.post("/auth/login", tags=["Auth"])
 def login(
     body: LoginRequest,
     request: Request,
@@ -318,7 +333,7 @@ def login(
     return _auth_response(result)
 
 
-@router.post("/auth/refresh")
+@router.post("/auth/refresh", tags=["Auth"])
 def refresh(
     request: Request,
     response: Response,
@@ -336,7 +351,7 @@ def refresh(
     return _auth_response(result)
 
 
-@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/auth/logout", tags=["Auth"], status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request,
     response: Response,
@@ -350,7 +365,7 @@ def logout(
     return response
 
 
-@router.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/auth/change-password", tags=["Auth"], status_code=status.HTTP_204_NO_CONTENT)
 def change_password(
     body: ChangePasswordRequest,
     context: PasswordChangeContext,
@@ -372,7 +387,7 @@ def change_password(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/me")
+@router.get("/me", tags=["Auth"])
 def get_me(
     context: CurrentContext,
     repository: RepositoryDependency,
@@ -384,14 +399,13 @@ def get_me(
         "role": context.role_name,
         "capabilities": sorted(context.capabilities),
         "projects": [
-            {"id": str(project["id"]), "name": str(project["name"])}
-            for project in projects
+            {"id": str(project["id"]), "name": str(project["name"])} for project in projects
         ],
         "must_change_password": context.must_change_password,
     }
 
 
-@router.post("/connections/test")
+@router.post("/connections/test", tags=["Projects"])
 def post_connection_test(
     body: ConnectionRequest,
     _context: ManageConnectionContext,
@@ -403,7 +417,7 @@ def post_connection_test(
     return {"server_version": result.server_version, "latency_ms": result.latency_ms}
 
 
-@router.get("/projects")
+@router.get("/projects", tags=["Projects"])
 def list_projects(
     context: CurrentContext,
     repository: RepositoryDependency,
@@ -421,7 +435,7 @@ def list_projects(
     }
 
 
-@router.post("/projects", status_code=status.HTTP_201_CREATED)
+@router.post("/projects", tags=["Projects"], status_code=status.HTTP_201_CREATED)
 def create_project(
     body: ConnectionRequest,
     context: ManageConnectionContext,
@@ -448,11 +462,17 @@ def create_project(
         owner_id=context.user_id,
     )
     auth_service.invalidate_auth_context(context.user_id)
-    audit.record(context.user_id, "project_created", "project", str(project_id), {"name": body.display_name, "database": body.database})
+    audit.record(
+        context.user_id,
+        "project_created",
+        "project",
+        str(project_id),
+        {"name": body.display_name, "database": body.database},
+    )
     return {"id": str(project_id), "name": body.display_name, "setup_step": "tables"}
 
 
-@router.get("/projects/{project_id}/setup")
+@router.get("/projects/{project_id}/setup", tags=["Projects"])
 def get_setup_state(
     project_id: UUID,
     context: ManageConnectionContext,
@@ -469,7 +489,7 @@ def get_setup_state(
     }
 
 
-@router.get("/projects/{project_id}/catalog/tables")
+@router.get("/projects/{project_id}/catalog/tables", tags=["Projects"])
 def list_catalog_tables(
     project_id: UUID,
     context: ManageConnectionContext,
@@ -486,7 +506,8 @@ def list_catalog_tables(
     except psycopg.Error as error:
         raise HTTPException(status_code=502, detail="Could not read database catalog") from error
     filtered = [
-        table for table in tables
+        table
+        for table in tables
         if search.casefold() in f"{table.schema_name}.{table.table_name}".casefold()
     ]
     offset = (page - 1) * page_size
@@ -506,7 +527,7 @@ def list_catalog_tables(
     }
 
 
-@router.put("/projects/{project_id}/selected-tables")
+@router.put("/projects/{project_id}/selected-tables", tags=["Projects"])
 def save_selected_tables(
     project_id: UUID,
     body: SelectedTablesRequest,
@@ -515,9 +536,7 @@ def save_selected_tables(
 ) -> dict[str, object]:
     _require_project_access(context, project_id)
     _, catalog = _project_connection(repository, project_id)
-    available = {
-        (table.schema_name, table.table_name) for table in catalog.list_tables()
-    }
+    available = {(table.schema_name, table.table_name) for table in catalog.list_tables()}
     selected = [(table.schema_name, table.table_name) for table in body.tables]
     if len(set(selected)) != len(selected):
         raise HTTPException(status_code=422, detail="Selected tables must be unique")
@@ -531,7 +550,7 @@ def save_selected_tables(
     return {"project_id": str(project_id), "step": "relationships", "selected_count": len(selected)}
 
 
-@router.post("/projects/{project_id}/introspect")
+@router.post("/projects/{project_id}/introspect", tags=["Projects"])
 def introspect_project(
     project_id: UUID,
     context: ManageConnectionContext,
@@ -555,7 +574,7 @@ def introspect_project(
     }
 
 
-@router.get("/projects/{project_id}/mdl")
+@router.get("/projects/{project_id}/mdl", tags=["Projects"])
 def get_mdl(
     project_id: UUID,
     context: EditMdlContext,
@@ -569,7 +588,7 @@ def get_mdl(
     return document
 
 
-@router.put("/projects/{project_id}/mdl")
+@router.put("/projects/{project_id}/mdl", tags=["Projects"])
 def save_mdl(
     project_id: UUID,
     body: Mdl,
@@ -596,12 +615,20 @@ def save_mdl(
     except (MdlValidationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except psycopg.Error as error:
-        raise HTTPException(status_code=502, detail="Could not validate MDL against catalog") from error
+        raise HTTPException(
+            status_code=502, detail="Could not validate MDL against catalog"
+        ) from error
     version = repository.save_mdl(
         str(project_id),
         body.model_dump(by_alias=True, mode="json"),
     )
-    audit.record(context.user_id, "mdl_saved", "project", str(project_id), {"revision": version, "models": len(body.models), "metrics": len(body.metrics)})
+    audit.record(
+        context.user_id,
+        "mdl_saved",
+        "project",
+        str(project_id),
+        {"revision": version, "models": len(body.models), "metrics": len(body.metrics)},
+    )
     return {
         "project_id": str(project_id),
         "revision": version,
@@ -609,7 +636,7 @@ def save_mdl(
     }
 
 
-@router.post("/projects/{project_id}/deploy")
+@router.post("/projects/{project_id}/deploy", tags=["Projects"])
 def deploy_project_mdl(
     project_id: UUID,
     context: DeployMdlContext,
@@ -626,8 +653,7 @@ def deploy_project_mdl(
     vector_store: QdrantVectorStoreAdapter | None = None
     try:
         mdl_document = {
-            key: value for key, value in document.items()
-            if key not in {"project_id", "revision"}
+            key: value for key, value in document.items() if key not in {"project_id", "revision"}
         }
         mdl = Mdl.model_validate(mdl_document)
         settings = get_settings()
@@ -656,7 +682,7 @@ def deploy_project_mdl(
     return result
 
 
-@router.get("/roles")
+@router.get("/roles", tags=["Users & Roles"])
 def list_roles(
     _context: ManageRolesContext,
     repository: RepositoryDependency,
@@ -664,7 +690,7 @@ def list_roles(
     return {"items": repository.list_roles()}
 
 
-@router.post("/roles", status_code=status.HTTP_201_CREATED)
+@router.post("/roles", tags=["Users & Roles"], status_code=status.HTTP_201_CREATED)
 def create_role(
     body: RoleRequest,
     context: ManageRolesContext,
@@ -676,11 +702,17 @@ def create_role(
         role_id = repository.create_role(body.name, body.description, body.capabilities)
     except psycopg.errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Role name already exists") from error
-    audit.record(context.user_id, "role_created", "role", str(role_id), {"name": body.name, "capabilities": sorted(body.capabilities)})
+    audit.record(
+        context.user_id,
+        "role_created",
+        "role",
+        str(role_id),
+        {"name": body.name, "capabilities": sorted(body.capabilities)},
+    )
     return {"id": role_id, **body.model_dump()}
 
 
-@router.put("/roles/{role_id}")
+@router.put("/roles/{role_id}", tags=["Users & Roles"])
 def update_role(
     role_id: UUID,
     body: RoleRequest,
@@ -700,11 +732,17 @@ def update_role(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except psycopg.errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Role name already exists") from error
-    audit.record(context.user_id, "role_updated", "role", str(role_id), {"name": body.name, "capabilities": sorted(body.capabilities)})
+    audit.record(
+        context.user_id,
+        "role_updated",
+        "role",
+        str(role_id),
+        {"name": body.name, "capabilities": sorted(body.capabilities)},
+    )
     return {"id": str(role_id), **body.model_dump()}
 
 
-@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/roles/{role_id}", tags=["Users & Roles"], status_code=status.HTTP_204_NO_CONTENT)
 def delete_role(
     role_id: UUID,
     context: ManageRolesContext,
@@ -721,7 +759,7 @@ def delete_role(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/users")
+@router.get("/users", tags=["Users & Roles"])
 def list_users(
     _context: ManageUsersContext,
     repository: RepositoryDependency,
@@ -729,7 +767,7 @@ def list_users(
     return {"items": repository.list_users()}
 
 
-@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.post("/users", tags=["Users & Roles"], status_code=status.HTTP_201_CREATED)
 def create_user(
     body: UserRequest,
     context: ManageUsersContext,
@@ -749,7 +787,7 @@ def create_user(
     return {"id": user_id, "username": body.username.casefold(), "role": body.role}
 
 
-@router.put("/users/{user_id}/role")
+@router.put("/users/{user_id}/role", tags=["Users & Roles"])
 def assign_user_role(
     user_id: UUID,
     body: UserRoleRequest,
@@ -769,7 +807,7 @@ def assign_user_role(
     return {"user_id": str(user_id), "role": body.role}
 
 
-@router.get("/users/{user_id}/project-access")
+@router.get("/users/{user_id}/project-access", tags=["Users & Roles"])
 def get_user_project_access(
     user_id: UUID,
     _context: ManageUsersContext,
@@ -780,7 +818,7 @@ def get_user_project_access(
     return {"project_ids": repository.get_user_project_access(str(user_id))}
 
 
-@router.put("/users/{user_id}/project-access")
+@router.put("/users/{user_id}/project-access", tags=["Users & Roles"])
 def set_user_project_access(
     user_id: UUID,
     body: ProjectAccessRequest,
@@ -797,11 +835,17 @@ def set_user_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    audit.record(context.user_id, "user_project_access_changed", "user", str(user_id), {"project_ids": [str(p) for p in body.project_ids]})
+    audit.record(
+        context.user_id,
+        "user_project_access_changed",
+        "user",
+        str(user_id),
+        {"project_ids": [str(p) for p in body.project_ids]},
+    )
     return {"user_id": str(user_id), "project_ids": body.project_ids}
 
 
-@router.get("/roles/{role_id}/project-access")
+@router.get("/roles/{role_id}/project-access", tags=["Users & Roles"])
 def get_role_project_access(
     role_id: UUID,
     _context: ManageRolesContext,
@@ -812,7 +856,7 @@ def get_role_project_access(
     return {"project_ids": repository.get_role_project_access(str(role_id))}
 
 
-@router.put("/roles/{role_id}/project-access")
+@router.put("/roles/{role_id}/project-access", tags=["Users & Roles"])
 def set_role_project_access(
     role_id: UUID,
     body: ProjectAccessRequest,
@@ -829,11 +873,17 @@ def set_role_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    audit.record(context.user_id, "role_project_access_changed", "role", str(role_id), {"project_ids": [str(p) for p in body.project_ids]})
+    audit.record(
+        context.user_id,
+        "role_project_access_changed",
+        "role",
+        str(role_id),
+        {"project_ids": [str(p) for p in body.project_ids]},
+    )
     return {"role_id": str(role_id), "project_ids": body.project_ids}
 
 
-@router.get("/users/{user_id}/attributes")
+@router.get("/users/{user_id}/attributes", tags=["Users & Roles"])
 def get_user_attributes(
     user_id: UUID,
     _context: ManageUsersContext,
@@ -844,7 +894,7 @@ def get_user_attributes(
     return {"attributes": repository.get_user_attributes(str(user_id))}
 
 
-@router.put("/users/{user_id}/attributes")
+@router.put("/users/{user_id}/attributes", tags=["Users & Roles"])
 def set_user_attributes(
     user_id: UUID,
     body: UserAttributesRequest,
@@ -856,11 +906,17 @@ def set_user_attributes(
         repository.replace_user_attributes(str(user_id), body.attributes)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    audit.record(context.user_id, "user_attributes_changed", "user", str(user_id), {"keys": sorted(body.attributes)})
+    audit.record(
+        context.user_id,
+        "user_attributes_changed",
+        "user",
+        str(user_id),
+        {"keys": sorted(body.attributes)},
+    )
     return {"user_id": str(user_id), "attributes": body.attributes}
 
 
-@router.get("/sample-projects")
+@router.get("/sample-projects", tags=["Projects"])
 def list_sample_project_templates(
     _context: ManageConnectionContext,
 ) -> dict[str, object]:
@@ -876,7 +932,9 @@ def list_sample_project_templates(
     }
 
 
-@router.post("/sample-projects/{template_id}", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sample-projects/{template_id}", tags=["Projects"], status_code=status.HTTP_201_CREATED
+)
 def create_sample_project(
     template_id: str,
     context: ManageConnectionContext,
@@ -922,23 +980,17 @@ def create_sample_project(
         )
         schemas = (table_pairs[0][0],)
         available = {
-            (table.schema_name, table.table_name)
-            for table in catalog.list_tables(schemas)
+            (table.schema_name, table.table_name) for table in catalog.list_tables(schemas)
         }
         selections = [
-            {"schema": schema_name, "table": table_name}
-            for schema_name, table_name in table_pairs
+            {"schema": schema_name, "table": table_name} for schema_name, table_name in table_pairs
         ]
-        unknown = {
-            (item["schema"], item["table"]) for item in selections
-        } - available
+        unknown = {(item["schema"], item["table"]) for item in selections} - available
         if unknown:
             raise ConnectionTestError(
                 f"Sample database is missing required table(s): {sorted(unknown)}"
             )
-        draft = ProfilingService(catalog).create_draft(
-            tuple(table_pairs)
-        )
+        draft = ProfilingService(catalog).create_draft(tuple(table_pairs))
     except (ConnectionTestError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except psycopg.Error as error:
@@ -963,6 +1015,11 @@ def create_sample_project(
         project_id,
         draft.mdl.model_dump(by_alias=True, mode="json"),
     )
-    audit.record(context.user_id, "sample_project_created", "project", project_id, {"template": template_id, "revision": revision})
+    audit.record(
+        context.user_id,
+        "sample_project_created",
+        "project",
+        project_id,
+        {"template": template_id, "revision": revision},
+    )
     return {"id": project_id, "name": template_name, "revision": revision}
-

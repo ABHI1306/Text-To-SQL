@@ -30,12 +30,10 @@ from app.config import get_settings
 from app.core.types import Principal
 from app.domain.mdl import Mdl
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["Query"])
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
-GovernanceDependency = Annotated[
-    PostgresGovernanceRepository, Depends(get_governance_repository)
-]
+GovernanceDependency = Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question"))]
 
@@ -51,7 +49,9 @@ class AskQuestionRequest(BaseModel):
 
 
 class _Prepared:
-    def __init__(self, service: AskService, mdl: Mdl, version: int, close: Callable[[], None]) -> None:
+    def __init__(
+        self, service: AskService, mdl: Mdl, version: int, close: Callable[[], None]
+    ) -> None:
         self.service = service
         self.mdl = mdl
         self.version = version
@@ -82,7 +82,9 @@ def _prepare(
     _, dsn, ca_certificate = _project_connection_details(repository, project_id)
     settings = get_settings()
     service, close = build_ask_service(
-        dsn, ca_certificate, audit=audit,
+        dsn,
+        ca_certificate,
+        audit=audit,
         threads=PostgresThreadStore(settings.metadata_database_url),
         knowledge=PostgresKnowledgeRepository(settings.metadata_database_url),
     )
@@ -123,7 +125,11 @@ def ask_project_question(
         status_code = 503 if failure.code in _UNAVAILABLE else 422
         raise HTTPException(
             status_code=status_code,
-            detail={"code": failure.code, "message": failure.message, "retryable": failure.retryable},
+            detail={
+                "code": failure.code,
+                "message": failure.message,
+                "retryable": failure.retryable,
+            },
         )
     response: dict[str, Any] = {
         "logical_sql": result.logical_sql,
@@ -167,13 +173,23 @@ def ask_project_question_stream(
             yield from (
                 _sse(event)
                 for event in prepared.service.stream(
-                    str(project_id), prepared.version, prepared.mdl, principal, policies,
-                    body.question, include_compiled=include_compiled,
+                    str(project_id),
+                    prepared.version,
+                    prepared.mdl,
+                    principal,
+                    policies,
+                    body.question,
+                    include_compiled=include_compiled,
                     thread_id=str(body.thread_id) if body.thread_id else None,
                 )
             )
         except Exception:  # noqa: BLE001 - fail closed into a typed failure
-            yield _sse(AskEvent("error", {"code": "INTERNAL", "message": "The question failed.", "retryable": True}))
+            yield _sse(
+                AskEvent(
+                    "error",
+                    {"code": "INTERNAL", "message": "The question failed.", "retryable": True},
+                )
+            )
         finally:
             prepared.close()
 
@@ -182,6 +198,3 @@ def ask_project_question_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-

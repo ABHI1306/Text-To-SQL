@@ -28,7 +28,7 @@ from app.scheduler.cron import validate_schedule
 from app.semantic.drift import DriftApplyError, DriftFinding, apply_drift
 from app.semantic.drift_job import load_mdl
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["Drift & Profiling"])
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
@@ -119,11 +119,18 @@ def set_profiling_schedule(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     job = jobs.upsert_for_project(
-        str(project_id), context.user_id, JOB_KIND_PROFILE_DRIFT,
-        " ".join(body.schedule.split()), body.timezone, first_slot,
+        str(project_id),
+        context.user_id,
+        JOB_KIND_PROFILE_DRIFT,
+        " ".join(body.schedule.split()),
+        body.timezone,
+        first_slot,
     )
     audit.record(
-        context.user_id, "profiling_schedule_set", "project", str(project_id),
+        context.user_id,
+        "profiling_schedule_set",
+        "project",
+        str(project_id),
         {"schedule": job.schedule, "timezone": job.timezone},
     )
     return _job_json(job)

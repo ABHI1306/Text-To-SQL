@@ -14,7 +14,23 @@ settings = get_settings()
 validate_runtime_secrets(settings)
 configure_logging(settings.log_level)
 
-app = FastAPI(title="Text-to-SQL Platform", version="0.1.0")
+TAGS = [
+    {"name": n}
+    for n in (
+        "Health",
+        "Auth",
+        "Projects",
+        "Governance",
+        "Audit",
+        "Query",
+        "Knowledge",
+        "Drift & Profiling",
+        "Users & Roles",
+        "Admin",
+    )
+]
+
+app = FastAPI(title="Text-to-SQL Platform", version="0.1.0", openapi_tags=TAGS)
 app.include_router(api_router)
 app.include_router(governance_router)
 app.include_router(ask_router)
@@ -23,6 +39,7 @@ app.include_router(oidc_router)
 app.include_router(drift_router)
 app.include_router(admin_router)
 
-@app.get("/health")
+
+@app.get("/health", tags=["Health"])
 def health() -> dict[str, str]:
     return {"status": "ok"}

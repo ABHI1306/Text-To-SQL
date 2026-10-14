@@ -13,7 +13,7 @@ from app.auth.oidc import OidcLoginService
 from app.auth.service import AuthenticationError
 from app.config import get_settings
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["Auth"])
 
 STATE_COOKIE = "oidc_state"
 STATE_COOKIE_PATH = "/api/v1/auth/oidc"

@@ -35,9 +35,7 @@ router = APIRouter(prefix="/api/v1")
 SAMPLE_ROWS = 10
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
-GovernanceDependency = Annotated[
-    PostgresGovernanceRepository, Depends(get_governance_repository)
-]
+GovernanceDependency = Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 EditMdlContext = Annotated[AuthContext, Depends(require_capability("edit_mdl"))]
 ManagePoliciesContext = Annotated[AuthContext, Depends(require_capability("manage_policies"))]
@@ -148,7 +146,7 @@ def _compiled_json(compiled: CompiledQuery) -> dict[str, object]:
     }
 
 
-@router.post("/projects/{project_id}/compile-preview")
+@router.post("/projects/{project_id}/compile-preview", tags=["Governance"])
 def compile_preview(
     project_id: UUID,
     body: CompilePreviewRequest,
@@ -170,8 +168,7 @@ def compile_preview(
     if body.preview_as_user_id is not None:
         principal = _load_principal(repository, context, body.preview_as_user_id)
         policies = [
-            stored.policy
-            for stored in governance.list_policies(str(project_id), enabled_only=True)
+            stored.policy for stored in governance.list_policies(str(project_id), enabled_only=True)
         ]
     compiled = compile_query(body.logical_sql, mdl, principal, policies)
     response: dict[str, object] = {
@@ -235,7 +232,7 @@ def _json_cell(value: object) -> object:
     return str(value)
 
 
-@router.get("/projects/{project_id}/deploy-report")
+@router.get("/projects/{project_id}/deploy-report", tags=["Governance"])
 def deploy_report(
     project_id: UUID,
     context: DeployMdlContext,
@@ -262,17 +259,21 @@ def _policy_mdl(repository: PostgresMetadataRepository, project_id: UUID) -> Mdl
     return _mdl_from_document(document)
 
 
-@router.get("/projects/{project_id}/row-policies")
+@router.get("/projects/{project_id}/row-policies", tags=["Governance"])
 def list_row_policies(
     project_id: UUID,
     context: ManagePoliciesContext,
     governance: GovernanceDependency,
 ) -> dict[str, object]:
     require_project_access(context, project_id)
-    return {"items": [_policy_json(item) for item in PolicyService(governance).list(str(project_id))]}
+    return {
+        "items": [_policy_json(item) for item in PolicyService(governance).list(str(project_id))]
+    }
 
 
-@router.post("/projects/{project_id}/row-policies", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/projects/{project_id}/row-policies", tags=["Governance"], status_code=status.HTTP_201_CREATED
+)
 def create_row_policy(
     project_id: UUID,
     body: PolicyRequest,
@@ -299,7 +300,7 @@ def create_row_policy(
     return _saved_json(saved)
 
 
-@router.put("/projects/{project_id}/row-policies/{policy_id}")
+@router.put("/projects/{project_id}/row-policies/{policy_id}", tags=["Governance"])
 def update_row_policy(
     project_id: UUID,
     policy_id: UUID,
@@ -332,6 +333,7 @@ def update_row_policy(
 
 @router.delete(
     "/projects/{project_id}/row-policies/{policy_id}",
+    tags=["Governance"],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_row_policy(
@@ -381,7 +383,7 @@ def _audit_json(record: AuditRecord) -> dict[str, Any]:
     }
 
 
-@router.get("/audit")
+@router.get("/audit", tags=["Audit"])
 def browse_audit(
     _context: ViewAuditContext,
     audit: AuditDependency,
@@ -426,7 +428,7 @@ class IdentityMappingsRequest(BaseModel):
     mappings: list[MappingItem] = Field(max_length=200)
 
 
-@router.get("/identity/mappings")
+@router.get("/identity/mappings", tags=["Governance"])
 def list_identity_mappings(
     _context: ManageRolesContext,
     repository: RepositoryDependency,
@@ -434,7 +436,7 @@ def list_identity_mappings(
     return {"items": repository.list_identity_mappings()}
 
 
-@router.put("/identity/mappings")
+@router.put("/identity/mappings", tags=["Governance"])
 def replace_identity_mappings(
     body: IdentityMappingsRequest,
     context: ManageRolesContext,

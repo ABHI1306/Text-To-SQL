@@ -71,9 +71,7 @@ def encrypt_connection(request: ConnectionRequest, settings: Settings) -> bytes:
     return get_fernet(settings).encrypt(json.dumps(payload).encode("utf-8"))
 
 
-def decrypt_connection(
-    encrypted: bytes, settings: Settings
-) -> dict[str, str | None]:
+def decrypt_connection(encrypted: bytes, settings: Settings) -> dict[str, str | None]:
     try:
         payload: Any = json.loads(get_fernet(settings).decrypt(encrypted))
     except (InvalidToken, json.JSONDecodeError) as error:

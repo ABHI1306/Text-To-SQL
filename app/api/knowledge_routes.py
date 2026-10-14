@@ -28,7 +28,7 @@ from app.knowledge.service import (
 )
 from app.ports.knowledge import Instruction, SqlPair
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["Knowledge"])
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
 KnowledgeDependency = Annotated[KnowledgeService, Depends(get_knowledge_service)]
@@ -175,7 +175,10 @@ def update_instruction(
     with _mapped():
         return _instruction_json(
             knowledge.update_instruction(
-                str(project_id), str(instruction_id), text=body.text, active=body.active,
+                str(project_id),
+                str(instruction_id),
+                text=body.text,
+                active=body.active,
                 actor_id=context.user_id,
             )
         )
