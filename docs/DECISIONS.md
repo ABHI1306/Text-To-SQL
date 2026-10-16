@@ -311,3 +311,48 @@ the administration capabilities `manage_users`, `manage_roles`, `view_audit`, `r
   (8 threads), takeover, report idempotency, one draft per report and one-time OIDC state ran against
   it (`tests/test_scheduler_live.py`, needs `METADATA_APP_DSN`). Keycloak was not started here, so
   `tests/test_oidc_live.py` and the realm import are untested against a real Keycloak.
+
+## Day 7: streaming ask, dashboards, scheduled questions, sharing, audit and evaluation
+
+Written without running the test suite or migrations (see "Not verified").
+
+- **Thread endpoints** (`app/api/thread_routes.py`): `POST /projects/{id}/threads`,
+  `GET /threads/{id}` (owner, `view_all_threads`, or a share with `view_shared`),
+  `POST /threads/{id}/ask` (SSE, section 8 vocabulary: `intent`, `answer_token`, `chart`
+  `{vega_lite_spec}`, `clarification {question, options}`, `suggestions`, `done`, `error`),
+  `POST /threads/{id}/rerun-sql`, `POST /messages/{id}/feedback`. The old
+  `/projects/{id}/query[/stream]` endpoints are unchanged (the UI still uses them); the contract
+  vocabulary is opt-in through `AskService.stream(contract=True)`.
+- **Assumptions**: `preview_as` and compiled SQL both need `rerun_sql`; a preview run reads the
+  owner's history and writes nothing; `tokens` is 0 and `gpu_ms` null because the Ollama adapter
+  reports neither yet; `max_rows` can only lower the configured limit; message ids are the
+  `thread_turns` ids; only the thread owner may ask in a thread.
+- **One run path**: `app/semantic/runner.py` (compile, validate, plan, execute) is used by
+  rerun-sql, tiles, scheduled questions and the evaluation references.
+- **Safe sharing** (`app/collab/service.py`): resources store logical SQL only. A viewer's rows are
+  compiled and run under the viewer's own principal; `result_cache` is keyed by
+  (resource, `policy_context`, model version) and reused only on an exact match. Not-visible and
+  not-found are the same 404. Role shares use the role *name* as `grantee_id`.
+- **Scheduled questions** reuse the Day 6 job engine (migration `0007_day7`): `scheduled_jobs` gets
+  kind `saved_question` and a `saved_question_id` column, the project-and-kind uniqueness now
+  applies to `profile_drift` only, and the runner checks `schedule_question` (not
+  `manage_profiling`) for these jobs. There is no separate `scheduled_questions` table: the job row
+  is the schedule. `question_runs` keeps the last 20 runs; a run-now with the same
+  `Idempotency-Key` returns the earlier run.
+- **Routes that need `view_shared`**: opening a dashboard or reading a tile result declares
+  `view_shared`, so an owner whose custom role lacks it cannot open their own dashboard.
+- **Evaluation** (`app/evaluation/execution.py`): the golden set through the real pipeline, with
+  the failing stage recorded per case and a diff against the previous completed run. The intent and
+  follow-up sets stay on the CLI; the compile and red-team sets stay CI tests (they pin the demo
+  model).
+- **Audit browser**: `/audit-events` (same handler as `/audit`) and `/audit-events/export.csv`
+  (10,000-row cap; cells starting with `=`, `+`, `-`, `@` are prefixed with `'`).
+- **Notifications** (`GET /notifications`, `POST /notifications/{id}/read`): failed scheduled runs
+  and new drift reports (to the job owner).
+- **Allowed hosts**: `GET/PUT /settings/allowed-hosts` (`manage_connection`) stored in
+  `app_settings`; link-local and metadata addresses are refused in the editor and at test time.
+- **UI**: Audit, Drift and profiling, Evaluation and Shared with me screens, sign-in options from
+  `GET /auth/methods`, and the notification count. The Dashboards and Scheduled questions screens
+  are Day 8.
+- **Not verified**: migration `0007_day7`, the PostgreSQL collaboration store and the UI were not
+  run; `docs/openapi.yaml` and `ui/src/api/schema.d.ts` were not regenerated.

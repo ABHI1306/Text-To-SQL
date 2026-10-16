@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 JOB_KIND_PROFILE_DRIFT = "profile_drift"
+JOB_KIND_SAVED_QUESTION = "saved_question"
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class ScheduledJob:
     paused_reason: str | None = None
     last_run_at: datetime | None = None
     last_status: str | None = None
+    saved_question_id: str | None = None  # the target of a 'saved_question' job
 
 
 @dataclass(frozen=True)
@@ -87,3 +89,30 @@ class JobStorePort(Protocol):
         ...
 
     def delete_for_project(self, project_id: str, kind: str) -> bool: ...
+
+    def create_job(
+        self,
+        project_id: str,
+        owner_id: str,
+        kind: str,
+        schedule: str,
+        timezone: str,
+        next_run_at: datetime,
+        saved_question_id: str | None,
+    ) -> ScheduledJob:
+        """A new active job (several may share a project and kind, unlike the project upsert)."""
+        ...
+
+    def list_jobs(
+        self, kind: str, *, owner_id: str | None = None, project_id: str | None = None
+    ) -> list[ScheduledJob]: ...
+
+    def update_job(
+        self, job_id: str, schedule: str, timezone: str, next_run_at: datetime
+    ) -> ScheduledJob | None:
+        """New schedule and next slot; the job becomes active again."""
+        ...
+
+    def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None: ...
+
+    def delete_job(self, job_id: str) -> bool: ...

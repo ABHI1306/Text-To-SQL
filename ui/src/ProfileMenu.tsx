@@ -1,15 +1,26 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { PasswordField } from './PasswordField'
+import type { ThemeChoice } from './theme'
+
+const THEMES: { value: ThemeChoice; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+]
 
 export function ProfileMenu({
   username,
   role,
+  theme,
+  onTheme,
   onChangePassword,
   onSignOut,
 }: {
   username: string
   role: string | undefined
+  theme: ThemeChoice
+  onTheme: (theme: ThemeChoice) => void
   /** Resolves to an error message, or null when the password was changed. */
   onChangePassword: (current: string, next: string) => Promise<string | null>
   onSignOut: () => Promise<void>
@@ -69,6 +80,23 @@ export function ProfileMenu({
           <div className="profile-popover-head">
             <strong>{username}</strong>
             <small>{role ?? ''}</small>
+          </div>
+          <div className="theme-picker" role="group" aria-label="Theme">
+            <span>Theme</span>
+            <div>
+              {THEMES.map((option) => (
+                <button
+                  aria-checked={theme === option.value}
+                  className={theme === option.value ? 'selected' : undefined}
+                  key={option.value}
+                  onClick={() => onTheme(option.value)}
+                  role="menuitemradio"
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
           <button role="menuitem" type="button" onClick={() => { setOpen(false); setDialog(true) }}>
             Change password

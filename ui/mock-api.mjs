@@ -8,6 +8,7 @@ let project = {
 let selectedTables = []
 let mdlRevision = 0
 let savedMdl
+const mockThreads = []
 let activeRevision = null
 
 const catalog = [
@@ -259,11 +260,61 @@ const server = createServer(async (request, response) => {
     return
   }
 
+  const json = (status, payload) => {
+    response.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' })
+    response.end(JSON.stringify(payload))
+  }
+  if (request.method === 'POST' && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/threads$/)) {
+    const thread = { id: crypto.randomUUID(), title: '', turns: 0, last_activity: new Date().toISOString(), messages: [] }
+    mockThreads.push(thread)
+    json(201, { id: thread.id, project_id: url.pathname.split('/')[4] })
+    return
+  }
+  if (request.method === 'GET' && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/threads$/)) {
+    json(200, { items: mockThreads.filter((t) => t.turns > 0).map(({ messages, ...rest }) => rest).reverse() })
+    return
+  }
+  if (request.method === 'GET' && url.pathname.match(/^\/api\/v1\/threads\/[^/]+$/)) {
+    const thread = mockThreads.find((t) => t.id === url.pathname.split('/')[4])
+    if (!thread) return json(404, { detail: 'Thread not found' })
+    json(200, { id: thread.id, project_id: 'mock', owner_id: 'mock', messages: thread.messages })
+    return
+  }
+  if (request.method === 'POST' && url.pathname.match(/^\/api\/v1\/threads\/[^/]+\/rerun-sql$/)) {
+    json(200, { columns: ['customer_id', 'first_name'], rows: [[9, 'Rerun person']], truncated: false, row_count: 1, sql: 'SELECT 1' })
+    return
+  }
+  if (request.method === 'POST' && url.pathname.match(/^\/api\/v1\/messages\/[^/]+\/(feedback|run)$/)) {
+    if (url.pathname.endsWith('/run')) {
+      json(200, { columns: ['customer_id', 'first_name'], rows: [[1, 'Ada'], [2, 'Grace']], truncated: false, row_count: 2, sql: 'WITH m_customers AS (SELECT customer_id, first_name FROM ecommerce.customers) SELECT customer_id, first_name FROM m_customers AS customers' })
+    } else {
+      json(201, { id: 'fb-1', rating: JSON.parse(body || '{}').rating, proposal: null })
+    }
+    return
+  }
+
   if (
     request.method === 'POST'
-    && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/query\/stream$/)
+    && url.pathname.match(/^\/api\/v1\/(projects\/[^/]+\/query\/stream|threads\/[^/]+\/ask)$/)
   ) {
     const question = String(JSON.parse(body || '{}').question ?? '')
+    const askedThread = mockThreads.find((t) => url.pathname.includes(t.id))
+    if (askedThread) {
+      askedThread.title ||= question
+      askedThread.turns += 1
+      askedThread.messages.push({
+        id: String(askedThread.messages.length + 1), question, standalone_question: question,
+        logical_sql: 'SELECT customer_id, first_name FROM customers ORDER BY customer_id', answer: null,
+        summary: 'Two customers.', chart: null, suggestions: [], latency_ms: 150, failure: null,
+        model_version: 3,
+        trace: { models: ['customers'], steps: [
+          { title: 'Intent', detail: 'data question', ok: true, ms: 300 },
+          { title: 'Retrieval', detail: '1 models, 0 SQL pairs, 0 instructions', ok: true, ms: 400 },
+          { title: 'Compilation', detail: 'Row policies applied', ok: true, ms: 100 },
+        ] },
+        created_at: new Date().toISOString(),
+      })
+    }
     const send = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)
     const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })

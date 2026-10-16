@@ -14,6 +14,7 @@ from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
 from app.adapters.warehouse.postgres_catalog import PostgresCatalogAdapter
 from app.api.dependencies import (
+    effective_settings,
     get_audit_service,
     get_auth_service,
     get_current_context,
@@ -411,7 +412,7 @@ def post_connection_test(
     _context: ManageConnectionContext,
 ) -> dict[str, object]:
     try:
-        result = test_connection(body, get_settings())
+        result = test_connection(body, effective_settings())
     except ConnectionTestError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"server_version": result.server_version, "latency_ms": result.latency_ms}
@@ -444,7 +445,7 @@ def create_project(
     audit: AuditDependency,
 ) -> dict[str, object]:
     try:
-        test_connection(body, get_settings())
+        test_connection(body, effective_settings())
         encrypted = encrypt_connection(body, get_settings())
     except ConnectionTestError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

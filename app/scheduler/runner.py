@@ -23,7 +23,9 @@ from app.scheduler.cron import next_run
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_CAPABILITY = "manage_profiling"
+REQUIRED_CAPABILITY = "manage_profiling"  # the default, and what profile_drift needs
+# A job runs with its owner's authority, so each kind names the capability the owner must still hold.
+KIND_CAPABILITY = {"profile_drift": "manage_profiling", "saved_question": "schedule_question"}
 BATCH_SIZE = 20
 
 
@@ -130,7 +132,7 @@ class SlotRunner:
             self._pause(current, "owner_unavailable")
             return "skipped", None, "owner is disabled, locked or deleted"
         if (
-            REQUIRED_CAPABILITY not in owner.capabilities
+            KIND_CAPABILITY.get(current.kind, REQUIRED_CAPABILITY) not in owner.capabilities
             or current.project_id not in owner.project_ids
         ):
             self._pause(current, "owner_lacks_access")

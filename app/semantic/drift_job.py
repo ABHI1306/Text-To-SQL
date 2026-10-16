@@ -66,10 +66,12 @@ class DriftJobHandler:
         source: MdlSource,
         catalog_for: Callable[[str], CatalogPort],
         reports: DriftRepoPort,
+        notify: Callable[[str, str, dict[str, object]], None] | None = None,
     ) -> None:
         self._source = source
         self._catalog_for = catalog_for
         self._reports = reports
+        self._notify = notify
 
     def __call__(self, context: JobContext) -> Mapping[str, object]:
         project_id = context.job.project_id
@@ -87,6 +89,13 @@ class DriftJobHandler:
             findings=[finding.as_json() for finding in result.findings],
             created_by=context.owner.user_id,
         )
+        if result.has_drift and self._notify is not None:
+            self._notify(
+                context.owner.user_id,
+                "drift_report",
+                {"project_id": project_id, "report_id": report_id, "mdl_version": version,
+                 "summary": cast(dict[str, object], result.summary)},
+            )
         return {
             "reportId": report_id,
             "mdlVersion": version,

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.core.types import JsonValue
+from app.core.types import JsonValue, Principal
 
 
 @dataclass(frozen=True)
@@ -34,3 +34,14 @@ class LoginResult:
     refresh_token: str
     user: AuthContext
     expires_in: int
+
+
+def to_principal(context: AuthContext) -> Principal:
+    """The identity the compiler sees: the account's role, projects and row-policy attributes."""
+    return Principal(
+        user_id=context.user_id,
+        role_name=context.role_name,
+        capabilities=context.capabilities,
+        project_ids=context.project_ids,
+        attributes=context.attributes or {},
+    )

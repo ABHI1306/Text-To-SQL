@@ -49,6 +49,7 @@ class Settings:
     oidc_attribute_map: str = ""
     oidc_allow_insecure: bool = False
     scheduler_poll_seconds: int = 15
+    result_cache_seconds: int = 300
     scheduler_lease_seconds: int = 300
     scheduler_worker_id: str = ""
 
@@ -106,6 +107,7 @@ def get_settings() -> Settings:
         oidc_attribute_map=os.getenv("OIDC_ATTRIBUTE_MAP", ""),
         oidc_allow_insecure=os.getenv("OIDC_ALLOW_INSECURE", "").lower() in {"1", "true", "yes"},
         scheduler_poll_seconds=int(os.getenv("SCHEDULER_POLL_SECONDS", "15")),
+        result_cache_seconds=int(os.getenv("RESULT_CACHE_SECONDS", "300")),
         scheduler_lease_seconds=int(os.getenv("SCHEDULER_LEASE_SECONDS", "300")),
         scheduler_worker_id=os.getenv("SCHEDULER_WORKER_ID", ""),
     )

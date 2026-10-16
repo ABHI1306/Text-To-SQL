@@ -94,6 +94,46 @@ def decrypt_connection(encrypted: bytes, settings: Settings) -> dict[str, str | 
     }
 
 
+_FORBIDDEN_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local, includes cloud metadata 169.254.169.254
+    ipaddress.ip_network("fe80::/10"),
+)
+_FORBIDDEN_NAMES = {"metadata.google.internal", "metadata", "instance-data"}
+
+
+def host_is_forbidden(host: str) -> bool:
+    """Link-local and cloud metadata addresses stay refused whatever the allowlist says."""
+    normalized = host.rstrip(".").casefold()
+    if normalized in _FORBIDDEN_NAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return any(address in network for network in _FORBIDDEN_NETWORKS)
+
+
+def validate_allowed_hosts(hosts: list[str]) -> list[str]:
+    """Clean an edited allowlist; entries are hostnames, IPs or CIDR ranges, never forbidden."""
+    cleaned: list[str] = []
+    for raw in hosts:
+        item = raw.strip().casefold()
+        if not item or len(item) > 253 or any(char in item for char in "?#@ "):
+            raise ValueError(f"Invalid host entry {raw!r}")
+        if "/" in item:
+            try:
+                network = ipaddress.ip_network(item, strict=False)
+            except ValueError as error:
+                raise ValueError(f"Invalid network {raw!r}") from error
+            if any(network.overlaps(blocked) for blocked in _FORBIDDEN_NETWORKS):
+                raise ValueError(f"{raw!r} includes link-local or metadata addresses")
+        elif host_is_forbidden(item):
+            raise ValueError(f"{raw!r} is a link-local or metadata address")
+        if item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
 def _host_is_allowed(host: str, allowlist: tuple[str, ...]) -> bool:
     normalized = host.rstrip(".").casefold()
     for item in allowlist:
@@ -115,6 +155,8 @@ def test_connection(
     request: ConnectionRequest,
     settings: Settings,
 ) -> ConnectionTestResult:
+    if host_is_forbidden(request.host):
+        raise ConnectionTestError("Database host is not allowed")
     if not _host_is_allowed(request.host, settings.allowed_database_hosts):
         raise ConnectionTestError("Database host is not in DB_HOST_ALLOWLIST")
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyEvent, chartModel, emptyRun, parseSse } from './askStream'
+import { applyEvent, chartModel, emptyRun, groupThreads, parseSse, turnsFromThread } from './askStream'
 
 describe('parseSse', () => {
   it('parses complete events and keeps the unfinished tail', () => {
@@ -33,7 +33,7 @@ describe('applyEvent', () => {
     expect(run.logicalSql).toBe('SELECT 2')
     expect(run.compiledSql).toBe('WITH m AS (SELECT 1) SELECT 2')
     expect(run.steps.map((step) => step.title)).toEqual([
-      'Retrieval', 'SQL candidate', 'Compile', 'Correction', 'SQL candidate', 'Compile', 'Validate', 'PostgreSQL',
+      'Retrieval', 'SQL candidate', 'Compilation', 'Correction', 'SQL candidate', 'Compilation', 'Validation', 'PostgreSQL',
     ])
     expect(run.steps[2]).toMatchObject({ ok: false, detail: 'E_UNKNOWN_COLUMN x' })
     expect(run.steps.reduce((sum, step) => sum + step.ms, 0)).toBe(700 + 9000 + 4 + 0 + 8000 + 5 + 11 + 12)
@@ -69,5 +69,61 @@ describe('chartModel', () => {
     expect(chartModel(['a', 'b'], [])).toBeNull()
     expect(chartModel(['a', 'b'], [[1, 2]])).toBeNull()
     expect(chartModel(['a', 'b'], Array.from({ length: 201 }, (_, i) => [`k${i}`, i]))).toBeNull()
+  })
+})
+
+describe('saved conversations', () => {
+  it('streams the summary and keeps the saved message id from done', () => {
+    let run = emptyRun('q')
+    run = applyEvent(run, { type: 'intent', data: { intent: 'data_question', used_context: false } })
+    run = applyEvent(run, { type: 'answer_token', data: { text: 'There are ' } })
+    run = applyEvent(run, { type: 'answer_token', data: { text: '12 orders.' } })
+    run = applyEvent(run, { type: 'done', data: { message_id: '42', latency_ms: 900 } })
+    expect(run.summary).toBe('There are 12 orders.')
+    expect(run.messageId).toBe('42')
+    expect(run.steps[0].title).toBe('Intent')
+  })
+
+  it('rebuilds a finished run from a saved message, without rows', () => {
+    const [turn] = turnsFromThread({
+      messages: [{
+        id: '7', question: 'orders?', logical_sql: 'SELECT 1', answer: null, summary: 'Twelve.',
+        suggestions: ['by region'], latency_ms: 800, failure: null,
+      }],
+    })
+    expect(turn.run).toMatchObject({ status: 'done', summary: 'Twelve.', messageId: '7', logicalSql: 'SELECT 1', rows: [] })
+  })
+
+  it('shows a saved failure as an error', () => {
+    const [turn] = turnsFromThread({
+      messages: [{
+        id: '8', question: 'bad', logical_sql: null, answer: null, summary: null, suggestions: [],
+        latency_ms: null, failure: { code: 'TIMEOUT', message: 'slow' },
+      }],
+    })
+    expect(turn.run.status).toBe('error')
+    expect(turn.run.error?.code).toBe('TIMEOUT')
+  })
+})
+
+describe('groupThreads', () => {
+  const at = (iso: string, id: string) => ({ id, title: id, turns: 1, last_activity: iso })
+  const now = new Date(2026, 9, 16, 14, 0)
+
+  it('groups into Today, Yesterday and Earlier, keeping the server order', () => {
+    const groups = groupThreads([
+      at(new Date(2026, 9, 16, 9, 0).toISOString(), 'a'),
+      at(new Date(2026, 9, 16, 8, 0).toISOString(), 'b'),
+      at(new Date(2026, 9, 15, 20, 0).toISOString(), 'c'),
+      at(new Date(2026, 9, 2, 8, 0).toISOString(), 'd'),
+    ], now)
+    expect(groups.map((g) => [g.label, g.threads.map((t) => t.id)])).toEqual([
+      ['Today', ['a', 'b']], ['Yesterday', ['c']], ['Earlier', ['d']],
+    ])
+  })
+
+  it('leaves out empty groups and tolerates a bad date', () => {
+    expect(groupThreads([at('not a date', 'x')], now).map((g) => g.label)).toEqual(['Earlier'])
+    expect(groupThreads([], now)).toEqual([])
   })
 })

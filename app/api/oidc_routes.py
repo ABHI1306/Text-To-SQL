@@ -45,6 +45,16 @@ def _clear_state_cookie(response: Response) -> None:
     )
 
 
+@router.get("/auth/methods")
+def login_methods(service: OidcDependency) -> dict[str, bool]:
+    """Which sign-in options the login page offers; carries no secrets."""
+    return {
+        "local": True,
+        "directory": bool(get_settings().ldap_uri),
+        "sso": service is not None,
+    }
+
+
 @router.get("/auth/oidc/login", status_code=302)
 def oidc_login(request: Request, service: OidcDependency) -> RedirectResponse:
     oidc = _require_oidc(service)

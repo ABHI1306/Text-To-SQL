@@ -109,6 +109,48 @@ class FakeJobStore:
         self.jobs[job.id] = job
         return job
 
+    def create_job(
+        self, project_id: str, owner_id: str, kind: str, schedule: str, timezone: str,
+        next_run_at: datetime, saved_question_id: str | None,
+    ) -> ScheduledJob:
+        job = ScheduledJob(
+            f"job-{len(self.jobs) + 1}", project_id, owner_id, kind, schedule, timezone, "active",
+            next_run_at, saved_question_id=saved_question_id,
+        )
+        self.jobs[job.id] = job
+        return job
+
+    def list_jobs(
+        self, kind: str, *, owner_id: str | None = None, project_id: str | None = None
+    ) -> list[ScheduledJob]:
+        return [
+            j for j in self.jobs.values()
+            if j.kind == kind and (owner_id is None or j.owner_id == owner_id)
+            and (project_id is None or j.project_id == project_id)
+        ]
+
+    def update_job(
+        self, job_id: str, schedule: str, timezone: str, next_run_at: datetime
+    ) -> ScheduledJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        self.jobs[job_id] = replace(
+            job, schedule=schedule, timezone=timezone, next_run_at=next_run_at, status="active",
+            paused_reason=None,
+        )
+        return self.jobs[job_id]
+
+    def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        self.jobs[job_id] = replace(job, status="active", paused_reason=None, next_run_at=next_run_at)
+        return self.jobs[job_id]
+
+    def delete_job(self, job_id: str) -> bool:
+        return self.jobs.pop(job_id, None) is not None
+
     def delete_for_project(self, project_id: str, kind: str) -> bool:
         existing = self.get_for_project(project_id, kind)
         if existing is None:

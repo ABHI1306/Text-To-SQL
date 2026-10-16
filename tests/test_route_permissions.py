@@ -15,9 +15,12 @@ from fastapi.testclient import TestClient
 from app.api import dependencies
 from app.api.admin_routes import router as admin_router
 from app.api.ask_routes import router as ask_router
+from app.api.collab_routes import router as collab_router
+from app.api.eval_routes import router as eval_router
 from app.api.governance_routes import router as governance_router
 from app.api.knowledge_routes import router as knowledge_router
 from app.api.routes import _CAPABILITIES, router
+from app.api.thread_routes import router as thread_router
 from app.auth.models import AuthContext
 
 # Routes that never need a bearer token.
@@ -31,6 +34,8 @@ AUTHENTICATED_ROUTES = {
     ("POST", "/api/v1/auth/change-password"),
     ("GET", "/api/v1/me"),
     ("GET", "/api/v1/projects"),
+    ("GET", "/api/v1/notifications"),
+    ("POST", "/api/v1/notifications/{notification_id}/read"),
 }
 
 USER_CAPABILITIES = frozenset({"ask_question", "give_feedback", "view_shared"})
@@ -69,7 +74,8 @@ def _routes() -> list[RouteInfo]:
     found: list[RouteInfo] = []
     for route in [
         *router.routes, *governance_router.routes, *ask_router.routes,
-        *knowledge_router.routes, *admin_router.routes,
+        *knowledge_router.routes, *admin_router.routes, *thread_router.routes,
+        *collab_router.routes, *eval_router.routes,
     ]:
         assert isinstance(route, APIRoute)
         capabilities = {
@@ -127,6 +133,9 @@ def _client(context: AuthContext) -> TestClient:
     app.include_router(ask_router)
     app.include_router(knowledge_router)
     app.include_router(admin_router)
+    app.include_router(thread_router)
+    app.include_router(collab_router)
+    app.include_router(eval_router)
     app.dependency_overrides[dependencies.get_current_context] = lambda: context
     app.dependency_overrides[dependencies.get_repository] = lambda: MagicMock()
     app.dependency_overrides[dependencies.get_knowledge_service] = lambda: MagicMock()

@@ -16,7 +16,7 @@ Row: TypeAlias = dict[str, object]
 
 _COLUMNS = (
     "id, project_id, owner_id, kind, schedule, timezone, status, paused_reason, "
-    "next_run_at, last_run_at, last_status"
+    "next_run_at, last_run_at, last_status, saved_question_id"
 )
 
 
@@ -46,7 +46,8 @@ class PostgresJobStore:
             cursor.execute(
                 """
                 SELECT j.id, j.project_id, j.owner_id, j.kind, j.schedule, j.timezone, j.status,
-                       j.paused_reason, j.next_run_at, j.last_run_at, j.last_status, l.slot
+                       j.paused_reason, j.next_run_at, j.last_run_at, j.last_status, j.saved_question_id,
+                       l.slot
                 FROM job_leases l JOIN scheduled_jobs j ON j.id = l.job_id
                 WHERE l.status = 'running' AND l.leased_until < %s AND j.status = 'active'
                 ORDER BY l.leased_until LIMIT %s
@@ -170,7 +171,7 @@ class PostgresJobStore:
                 INSERT INTO scheduled_jobs
                     (project_id, owner_id, kind, schedule, timezone, next_run_at)
                 VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s)
-                ON CONFLICT (project_id, kind) DO UPDATE
+                ON CONFLICT (project_id, kind) WHERE kind = 'profile_drift' DO UPDATE
                 SET owner_id = EXCLUDED.owner_id, schedule = EXCLUDED.schedule,
                     timezone = EXCLUDED.timezone, next_run_at = EXCLUDED.next_run_at,
                     status = 'active', paused_reason = NULL, updated_at = now()
@@ -181,6 +182,79 @@ class PostgresJobStore:
             row = cursor.fetchone()
         assert row is not None
         return _job(row)
+
+    def create_job(
+        self,
+        project_id: str,
+        owner_id: str,
+        kind: str,
+        schedule: str,
+        timezone: str,
+        next_run_at: datetime,
+        saved_question_id: str | None,
+    ) -> ScheduledJob:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO scheduled_jobs
+                    (project_id, owner_id, kind, schedule, timezone, next_run_at, saved_question_id)
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s::uuid)
+                RETURNING {_COLUMNS}
+                """,
+                (project_id, owner_id, kind, schedule, timezone, next_run_at, saved_question_id),
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        return _job(row)
+
+    def list_jobs(
+        self, kind: str, *, owner_id: str | None = None, project_id: str | None = None
+    ) -> list[ScheduledJob]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_COLUMNS} FROM scheduled_jobs
+                WHERE kind = %s AND (%s::uuid IS NULL OR owner_id = %s::uuid)
+                  AND (%s::uuid IS NULL OR project_id = %s::uuid)
+                ORDER BY created_at
+                """,
+                (kind, owner_id, owner_id, project_id, project_id),
+            )
+            return [_job(row) for row in cursor.fetchall()]
+
+    def update_job(
+        self, job_id: str, schedule: str, timezone: str, next_run_at: datetime
+    ) -> ScheduledJob | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE scheduled_jobs
+                SET schedule = %s, timezone = %s, next_run_at = %s, status = 'active',
+                    paused_reason = NULL, updated_at = now()
+                WHERE id = %s::uuid RETURNING {_COLUMNS}
+                """,
+                (schedule, timezone, next_run_at, job_id),
+            )
+            row = cursor.fetchone()
+        return _job(row) if row else None
+
+    def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE scheduled_jobs
+                SET status = 'active', paused_reason = NULL, next_run_at = %s, updated_at = now()
+                WHERE id = %s::uuid RETURNING {_COLUMNS}
+                """,
+                (next_run_at, job_id),
+            )
+            row = cursor.fetchone()
+        return _job(row) if row else None
+
+    def delete_job(self, job_id: str) -> bool:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM scheduled_jobs WHERE id = %s::uuid", (job_id,))
+            return cursor.rowcount == 1
 
     def delete_for_project(self, project_id: str, kind: str) -> bool:
         with self._connect() as connection, connection.cursor() as cursor:
@@ -204,4 +278,7 @@ def _job(row: Row) -> ScheduledJob:
         paused_reason=cast("str | None", row["paused_reason"]),
         last_run_at=cast("datetime | None", row["last_run_at"]),
         last_status=cast("str | None", row["last_status"]),
+        saved_question_id=(
+            str(row["saved_question_id"]) if row["saved_question_id"] is not None else None
+        ),
     )

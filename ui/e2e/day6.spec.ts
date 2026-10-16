@@ -194,7 +194,6 @@ test.describe('capability gating', () => {
     await expect(page.getByRole('button', { name: 'Shared with me', exact: true })).toBeVisible()
     for (const screen of ['Knowledge', 'Row policies', 'Users and roles']) {
       await expect(page.getByRole('button', { name: screen, exact: true })).toHaveCount(0)
-      await expect(page.getByLabel('Review screen').locator(`option[value="${screen}"]`)).toHaveCount(0)
     }
   })
 

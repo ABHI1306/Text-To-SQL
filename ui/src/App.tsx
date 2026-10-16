@@ -3,13 +3,28 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { hasCapability } from './api/access'
 import type { components } from './api/schema'
 import { AnswerPanel } from './AnswerPanel'
-import { streamQuestion, type AnswerRun } from './askStream'
+import { AuditScreen } from './AuditScreen'
+import { DriftScreen } from './DriftScreen'
+import { EvaluationScreen } from './EvaluationScreen'
+import { callApi } from './adminApi'
+import { ThemeToggle } from './ThemeToggle'
+import { useTheme } from './theme'
+import type { AnswerActions } from './AnswerPanel'
+import {
+  streamQuestion,
+  groupThreads,
+  turnsFromThread,
+  type AnswerRun,
+  type PastTurn,
+  type ThreadSummary,
+} from './askStream'
 import { KnowledgeScreen } from './KnowledgeScreen'
 import { ModelCanvas } from './ModelCanvas'
 import { PasswordField } from './PasswordField'
 import { ProfileMenu } from './ProfileMenu'
 import { RowPoliciesScreen } from './RowPoliciesScreen'
 import { SetupWizard } from './SetupWizard'
+import { SharedWithMeScreen } from './SharedWithMeScreen'
 import { UsersRolesScreen } from './UsersRolesScreen'
 import './App.css'
 
@@ -29,9 +44,6 @@ type Page =
   | 'Audit'
   | 'Evaluation'
 
-type ReviewRole = 'DBA' | 'Admin' | 'User' | 'Custom: Analyst+'
-type ReviewTheme = 'Light' | 'Dark'
-type ReviewViewport = 'Desktop 1280' | 'Mobile 390'
 
 const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capability: string }[] = [
   { page: 'Home', group: 'ASK', capability: 'ask_question' },
@@ -48,10 +60,15 @@ const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capa
   { page: 'Evaluation', group: 'SYSTEM', capability: 'run_eval' },
 ]
 
-const adminPages: Page[] = ['Knowledge', 'Row policies', 'Users and roles']
-
-// Failed scheduled runs and drift reports arrive with the notification API (Day 7/8).
-const notificationCount = 0
+const adminPages: Page[] = [
+  'Shared with me',
+  'Drift and profiling',
+  'Knowledge',
+  'Row policies',
+  'Users and roles',
+  'Audit',
+  'Evaluation',
+]
 
 const mobileNavigation: Page[] = ['Home', 'Shared with me', 'Dashboards']
 
@@ -61,11 +78,22 @@ const suggestions = [
   'Show as a monthly trend',
 ]
 
-const reviewRoles: ReviewRole[] = ['DBA', 'Admin', 'User', 'Custom: Analyst+']
-const reviewStates = ['Success', 'Streaming', 'Clarifying', 'Out of scope', 'Typed failure', 'Empty result', 'LLM unavailable']
-const setupSteps = ['Choose source', '1 Connect', '2 Tables', '3 Relationships']
 
 const PROJECT_KEY = 'selectedProjectId'
+
+// The refresh token rotates on every use and the server revokes the session when an old one is
+// replayed. Two refreshes at once (React dev mode runs effects twice, and several requests can
+// get a 401 together) would look like a replay, so concurrent callers share one request.
+let refreshInFlight: Promise<AuthResponse | null> | null = null
+
+function refreshSession(): Promise<AuthResponse | null> {
+  refreshInFlight ??= fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })
+    .then(async (response) => (response.ok ? ((await response.json()) as AuthResponse) : null))
+    .finally(() => {
+      refreshInFlight = null
+    })
+  return refreshInFlight
+}
 
 function readStoredProject(): string | null {
   try {
@@ -105,7 +133,9 @@ function App() {
   const [addingProject, setAddingProject] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [activeThread, setActiveThread] = useState<string | null>(null)
-  const [threadHistory, setThreadHistory] = useState<string[]>([])
+  const [threads, setThreads] = useState<ThreadSummary[]>([])
+  const [threadId, setThreadId] = useState<string | null>(null)
+  const [turns, setTurns] = useState<PastTurn[]>([])
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [run, setRun] = useState<AnswerRun | null>(null)
@@ -113,27 +143,30 @@ function App() {
   const abortRef = useRef<AbortController | null>(null)
   const [userPreview, setUserPreview] = useState('Myself')
   const [notice, setNotice] = useState<string | null>(null)
-  const [reviewRole, setReviewRole] = useState<ReviewRole>('DBA')
-  const [reviewTheme, setReviewTheme] = useState<ReviewTheme>('Light')
-  const [reviewViewport, setReviewViewport] = useState<ReviewViewport>('Desktop 1280')
   const [sessionExpired, setSessionExpired] = useState(false)
-  const [reviewState, setReviewState] = useState<string | null>(null)
-  const [setupStep, setSetupStep] = useState(setupSteps[0])
+  const [theme, setTheme, resolvedTheme] = useTheme()
+  const [methods, setMethods] = useState<{ directory: boolean; sso: boolean }>({ directory: false, sso: false })
+  const [notificationCount, setNotificationCount] = useState(0)
+
+  useEffect(() => {
+    fetch('/api/v1/auth/methods')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { directory?: boolean; sso?: boolean } | null) => {
+        if (body) setMethods({ directory: Boolean(body.directory), sso: Boolean(body.sso) })
+      })
+      .catch(() => undefined) // the login form works without the extra options
+  }, [])
 
   useEffect(() => {
     let active = true
 
     async function restoreSession() {
       try {
-        const response = await fetch('/api/v1/auth/refresh', {
-          method: 'POST',
-          credentials: 'include',
-        })
-        if (!response.ok) {
+        const auth = await refreshSession()
+        if (!auth) {
           if (active) setAuthReady(true)
           return
         }
-        const auth = (await response.json()) as AuthResponse
         if (!active) return
         setAccessToken(auth.access_token)
         setMustChangePassword(auth.must_change_password)
@@ -165,12 +198,8 @@ function App() {
   }
 
   const restoreAccessToken = useCallback(async (): Promise<AuthResponse | null> => {
-    const response = await fetch('/api/v1/auth/refresh', {
-      method: 'POST',
-      credentials: 'include',
-    })
-    if (!response.ok) return null
-    const auth = (await response.json()) as AuthResponse
+    const auth = await refreshSession()
+    if (!auth) return null
     setAccessToken(auth.access_token)
     setMustChangePassword(auth.must_change_password)
     return auth
@@ -195,6 +224,20 @@ function App() {
     }
     return response
   }, [accessToken, restoreAccessToken])
+
+  useEffect(() => {
+    if (!profile) return
+    let active = true
+    apiRequest('/api/v1/notifications?limit=50')
+      .then((response) => (response.ok ? response.json() : []))
+      .then((items: { read_at: string | null }[]) => {
+        if (active) setNotificationCount(items.filter((item) => !item.read_at).length)
+      })
+      .catch(() => undefined) // the bell simply shows no count
+    return () => {
+      active = false
+    }
+  }, [profile, apiRequest])
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -274,7 +317,10 @@ function App() {
       setLoginPassword('')
       setActivePage('Home')
       setRun(null)
-      setThreadHistory([])
+      setThreads([])
+      setTurns([])
+      setThreadId(null)
+      setActiveThread(null)
     }
   }
 
@@ -293,9 +339,163 @@ function App() {
       return null
     }
   }, [accessToken])
-  const visibleThreads = threadHistory.filter((thread) =>
-    thread.toLowerCase().includes(search.toLowerCase()),
+  const visibleThreads = threads.filter((thread) =>
+    thread.title.toLowerCase().includes(search.toLowerCase()),
   )
+
+  async function openThread(id: string) {
+    abortRef.current?.abort()
+    setQueryError(null)
+    setNotice(null)
+    try {
+      const body = await callApi<Parameters<typeof turnsFromThread>[0]>(apiRequest, `/api/v1/threads/${id}`)
+      const opened = turnsFromThread(body)
+      setTurns(opened)
+      setThreadId(id)
+      setActiveThread(null)
+      setRun(null)
+      // Show each answer with its table, as it looked when it was asked. A failed recompute
+      // leaves that turn with its "Show results" button.
+      void Promise.allSettled(
+        opened.filter((turn) => turn.run.logicalSql).map((turn) => fillTurnRows(turn)),
+      )
+    } catch (reason: unknown) {
+      setQueryError(reason instanceof Error ? reason.message : 'Could not open this conversation')
+    }
+  }
+
+  function newThread() {
+    abortRef.current?.abort()
+    setThreadId(null)
+    setTurns([])
+    setActiveThread(null)
+    setRun(null)
+    setQueryError(null)
+    setNotice(null)
+  }
+
+  /** Recomputes one saved answer's rows (they are never stored) and puts them on its turn. */
+  async function fillTurnRows(turn: PastTurn) {
+    if (!turn.run.messageId) return
+    const result = await callApi<{ columns: string[]; rows: unknown[][]; truncated: boolean; sql?: string }>(
+      apiRequest,
+      `/api/v1/messages/${turn.run.messageId}/run`,
+      'POST',
+    )
+    setTurns((current) => current.map((item) => item.key === turn.key
+      ? {
+          ...item,
+          run: {
+            ...item.run,
+            columns: result.columns,
+            rows: result.rows,
+            truncated: result.truncated,
+            compiledSql: result.sql ?? item.run.compiledSql,
+          },
+        }
+      : item))
+  }
+
+  /** Runs logical SQL again in this conversation (DBA only) and puts the rows on the answer. */
+  async function runSqlFor(target: string | null, sql: string) {
+    if (!threadId) throw new Error('Ask a question first')
+    const result = await callApi<{ columns: string[]; rows: unknown[][]; truncated: boolean; sql?: string }>(
+      apiRequest,
+      `/api/v1/threads/${threadId}/rerun-sql`,
+      'POST',
+      { logical_sql: sql },
+    )
+    const apply = (current: AnswerRun): AnswerRun => ({
+      ...current,
+      logicalSql: sql,
+      columns: result.columns,
+      rows: result.rows,
+      truncated: result.truncated,
+      compiledSql: result.sql ?? current.compiledSql,
+    })
+    if (target === null) setRun((current) => (current ? apply(current) : current))
+    else setTurns((current) => current.map((item) => item.key === target ? { ...item, run: apply(item.run) } : item))
+  }
+
+  /** Pin, schedule and share all start from a saved question made from this answer. */
+  async function saveAnswer(answer: AnswerRun): Promise<string> {
+    if (!selectedProjectId || !answer.logicalSql) throw new Error('There is no SQL to save')
+    const saved = await callApi<{ id: string }>(
+      apiRequest,
+      `/api/v1/projects/${selectedProjectId}/saved-questions`,
+      'POST',
+      { question: answer.question, logical_sql: answer.logicalSql },
+    )
+    return saved.id
+  }
+
+  function answerActions(answer: AnswerRun): AnswerActions {
+    const capabilities = profile?.capabilities ?? []
+    const actions: AnswerActions = {}
+    if (hasCapability(capabilities, 'create_dashboard')) {
+      actions.pin = async () => {
+        const questionId = await saveAnswer(answer)
+        const projectId = selectedProjectId as string
+        const existing = await callApi<{ id: string; title: string }[]>(
+          apiRequest,
+          `/api/v1/dashboards?project_id=${projectId}`,
+        )
+        const dashboard = existing[0]
+          ?? await callApi<{ id: string; title: string }>(apiRequest, '/api/v1/dashboards', 'POST', {
+            project_id: projectId,
+            title: 'My dashboard',
+          })
+        const current = await callApi<{ tiles: { saved_question_id: string; chart_spec: unknown; position_json: unknown }[] }>(
+          apiRequest,
+          `/api/v1/dashboards/${dashboard.id}`,
+        )
+        const tiles = [
+          ...current.tiles.map((tile) => ({
+            saved_question_id: tile.saved_question_id,
+            chart_spec: tile.chart_spec ?? null,
+            position: tile.position_json ?? {},
+          })),
+          { saved_question_id: questionId },
+        ]
+        await callApi(apiRequest, `/api/v1/dashboards/${dashboard.id}/tiles`, 'PUT', { tiles })
+        return `Pinned to "${dashboard.title}".`
+      }
+    }
+    if (hasCapability(capabilities, 'schedule_question')) {
+      actions.schedule = async (preset) => {
+        const questionId = await saveAnswer(answer)
+        await callApi(apiRequest, '/api/v1/scheduled-questions', 'POST', {
+          saved_question_id: questionId,
+          schedule: preset,
+        })
+        return `Scheduled ${preset}. It runs as you, with your own data access.`
+      }
+    }
+    if (hasCapability(capabilities, 'share')) {
+      actions.share = async (granteeType, grantee) => {
+        if (!threadId) throw new Error('Ask a question first')
+        await callApi(apiRequest, '/api/v1/shares', 'POST', {
+          resource_type: 'thread',
+          resource_id: threadId,
+          grantee_type: granteeType,
+          grantee_id: grantee,
+        })
+        return 'Shared read-only. They see answers computed with their own data access.'
+      }
+    }
+    return actions
+  }
+
+
+  async function loadTurnRows(key: string) {
+    const turn = turns.find((item) => item.key === key)
+    if (turn) await fillTurnRows(turn)
+  }
+
+  async function sendFeedback(messageId: string | null, rating: 'up' | 'down') {
+    if (!messageId) return
+    await callApi(apiRequest, `/api/v1/messages/${messageId}/feedback`, 'POST', { rating })
+  }
 
   async function submitQuestion(question = query) {
     const trimmed = question.trim()
@@ -306,19 +506,27 @@ function App() {
       return
     }
     setQuery('')
-    setActiveThread(trimmed)
-    setThreadHistory((history) => [
-      trimmed,
-      ...history.filter((item) => item !== trimmed),
-    ].slice(0, 20))
-    setRun(null)
     setQueryError(null)
     setNotice(null)
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    // The previous live answer becomes a finished turn above the new question.
+    if (run && activeThread) {
+      const finished: PastTurn = { key: run.messageId ?? `local-${turns.length}`, question: activeThread, run }
+      setTurns((current) => [...current, finished])
+    }
+    setActiveThread(trimmed)
+    setRun(null)
     try {
-      await streamQuestion(apiRequest, projectId, trimmed, setRun, controller.signal)
+      let id = threadId
+      if (!id) {
+        const created = await callApi<{ id: string }>(apiRequest, `/api/v1/projects/${projectId}/threads`, 'POST')
+        id = created.id
+        setThreadId(id)
+      }
+      await streamQuestion(apiRequest, id, trimmed, setRun, controller.signal)
+      void refreshThreads()
     } catch (reason: unknown) {
       if (controller.signal.aborted) {
         setRun((current) => current && current.status === 'running'
@@ -343,7 +551,9 @@ function App() {
     setQueryError(null)
     setQuery('')
     setActiveThread(null)
-    setThreadHistory([])
+    setThreads([])
+    setTurns([])
+    setThreadId(null)
     setNotice(null)
   }
 
@@ -378,6 +588,26 @@ function App() {
   const selectedProject = activeProject?.name ?? (profile ? 'No project yet' : 'Loading project')
   const username = profile?.username ?? 'Loading account'
   const selectedProjectId = activeProject?.id
+
+  /** Re-reads the saved conversation list for the active project from the database. */
+  const refreshThreads = useCallback(async () => {
+    if (!selectedProjectId) return
+    try {
+      const body = await callApi<{ items: ThreadSummary[] }>(
+        apiRequest,
+        `/api/v1/projects/${selectedProjectId}/threads`,
+      )
+      setThreads(body.items)
+    } catch {
+      // The list is a convenience; asking still works without it.
+    }
+  }, [apiRequest, selectedProjectId])
+
+  // Load the saved conversations whenever the signed-in user or the project changes.
+  useEffect(() => {
+    if (!profile || !selectedProjectId) return
+    void refreshThreads()
+  }, [profile, selectedProjectId, refreshThreads])
 
   if (!authReady) {
     return <main className="auth-page" aria-live="polite">Checking local session…</main>
@@ -435,106 +665,22 @@ function App() {
           )}
           {error && <p className="auth-error" role="alert">{error}</p>}
           {sessionExpired && <p className="auth-error" role="status">Your session expired. Sign in again.</p>}
+          {!mustChangePassword && methods.directory && (
+            <p className="auth-hint">Directory accounts sign in with their directory username and password.</p>
+          )}
           <button className="auth-submit" type="submit">
             {mustChangePassword ? 'Change password' : 'Sign in'}
           </button>
+          {!mustChangePassword && methods.sso && (
+            <a className="auth-sso" href="/api/v1/auth/oidc/login">Sign in with single sign-on</a>
+          )}
         </form>
       </main>
     )
   }
 
   return (
-    <div
-      className={`app-frame${reviewViewport === 'Mobile 390' ? ' mobile-preview' : ' desktop-preview'}`}
-      data-review-theme={reviewTheme.toLowerCase()}
-    >
-      <div className="review-header">
-        <div className="review-toolbar">
-          <strong className="review-title">Design review</strong>
-          <label className="review-control">Screen
-            <select
-              aria-label="Review screen"
-              onChange={(event) => {
-                const page = visibleNavigation.find(({ page: option }) => option === event.target.value)?.page
-                if (page) setActivePage(page)
-              }}
-              value={activePage}
-            >
-              {visibleNavigation.map(({ page }) => <option key={page} value={page}>{page}</option>)}
-            </select>
-          </label>
-          <div className="review-control-group" aria-label="Role preview">
-            <span>Role</span>
-            {reviewRoles.map((role) => (
-              <button
-                aria-pressed={reviewRole === role}
-                key={role}
-                onClick={() => setReviewRole(role)}
-                title="Visual preview only; this does not change authentication or permissions"
-                type="button"
-              >{role}</button>
-            ))}
-          </div>
-          <div className="review-control-group" aria-label="Theme preview">
-            <span>Theme</span>
-            {(['Light', 'Dark'] as const).map((theme) => (
-              <button aria-pressed={reviewTheme === theme} key={theme} onClick={() => setReviewTheme(theme)} type="button">{theme}</button>
-            ))}
-          </div>
-          <div className="review-control-group" aria-label="Viewport preview">
-            {(['Desktop 1280', 'Mobile 390'] as const).map((viewport) => (
-              <button
-                aria-pressed={reviewViewport === viewport}
-                key={viewport}
-                onClick={() => setReviewViewport(viewport)}
-                type="button"
-              >{viewport}</button>
-            ))}
-          </div>
-          <button
-            aria-pressed={sessionExpired}
-            className="review-toggle"
-            onClick={() => setSessionExpired((expired) => !expired)}
-            type="button"
-          >Session-expired banner</button>
-          {activePage === 'Home' && (
-            <div className="review-control-group review-state-controls" aria-label="Follow-up turn preview">
-              <span>Follow-up turn</span>
-              {reviewStates.map((state) => (
-                <button
-                  aria-pressed={reviewState === state}
-                  key={state}
-                  onClick={() => setReviewState(state)}
-                  type="button"
-                >{state}</button>
-              ))}
-            </div>
-          )}
-          {activePage === 'Setup' && (
-            <div className="review-control-group" aria-label="Setup step preview">
-              <span>Step</span>
-              {setupSteps.map((step) => (
-                <button
-                  aria-pressed={setupStep === step}
-                  key={step}
-                  onClick={() => setSetupStep(step)}
-                  type="button"
-                >{step}</button>
-              ))}
-            </div>
-          )}
-        </div>
-        {sessionExpired && <div className="session-expired" role="alert">Your session has expired. Sign in again to continue.</div>}
-        {reviewState && activePage === 'Home' && (
-          <div className="review-state-note" role="status">
-            Preview state: {reviewState}. This is a design-only simulation; it does not run the question pipeline.
-            <button aria-label="Clear follow-up preview" onClick={() => setReviewState(null)} type="button">×</button>
-          </div>
-        )}
-        {activePage === 'Setup' && (
-          <div className="review-state-note" role="status">Design focus: {setupStep}. The live setup workflow is below.</div>
-        )}
-      </div>
+    <div className="app-frame">
       <div className="app-shell">
         <aside className="product-sidebar">
           <a className="brand" href="/" aria-label="Amazatic home">
@@ -608,6 +754,8 @@ function App() {
           <ProfileMenu
             username={username}
             role={profile?.role}
+            theme={theme}
+            onTheme={setTheme}
             onChangePassword={changePassword}
             onSignOut={signOut}
           />
@@ -620,6 +768,7 @@ function App() {
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>Home</span></div>
             <div className="topbar-actions">
               <span className="local-status"><i />Local only · acme-db-01.internal</span>
+              <ThemeToggle onTheme={setTheme} resolved={resolvedTheme} />
               <button
                 className="icon-button notification-button"
                 type="button"
@@ -633,12 +782,7 @@ function App() {
 
           <div className="workspace-columns">
             <aside className="thread-sidebar">
-              <button className="new-thread-button" onClick={() => {
-                setActiveThread(null)
-                setRun(null)
-                setQueryError(null)
-                setNotice(null)
-              }} type="button">
+              <button className="new-thread-button" onClick={newThread} type="button">
                 <span>＋</span> New thread
               </button>
               <label className="thread-search">
@@ -650,27 +794,51 @@ function App() {
                   value={search}
                 />
               </label>
-              <span className="thread-date">THIS SESSION</span>
               <div className="thread-list">
-                {visibleThreads.map((thread) => (
-                  <button
-                    className={`thread-item${thread === activeThread ? ' active' : ''}`}
-                    key={thread}
-                    onClick={() => void submitQuestion(thread)}
-                    type="button"
-                  >
-                    {thread}
-                  </button>
+                {groupThreads(visibleThreads).map((group) => (
+                  <div className="thread-group" key={group.label}>
+                    <span className="thread-date">{group.label.toUpperCase()}</span>
+                    {group.threads.map((thread) => (
+                      <button
+                        className={`thread-item${thread.id === threadId ? ' active' : ''}`}
+                        key={thread.id}
+                        onClick={() => void openThread(thread.id)}
+                        title={`${thread.title} (${thread.turns} question${thread.turns === 1 ? '' : 's'})`}
+                        type="button"
+                      >
+                        {thread.title}
+                      </button>
+                    ))}
+                  </div>
                 ))}
                 {visibleThreads.length === 0 && (
-                  <span className="thread-empty">Your questions will appear here.</span>
+                  <span className="thread-empty">
+                    {threads.length === 0 ? 'Your conversations are saved here.' : 'No conversation matches.'}
+                  </span>
                 )}
               </div>
             </aside>
 
             <section className="conversation" aria-label="Question and answer">
               <div className="conversation-scroll">
-                {!activeThread && !busy && (
+                {turns.map((turn) => (
+                  <div className="past-turn" key={turn.key}>
+                    <div className="question-row">
+                      <div className="question-spacer" />
+                      <div className="question-bubble">{turn.question}</div>
+                    </div>
+                    <AnswerPanel
+                      run={turn.run}
+                      onAsk={(question) => void submitQuestion(question)}
+                      actions={answerActions(turn.run)}
+                      onFeedback={(rating) => sendFeedback(turn.run.messageId, rating)}
+                      onLoadRows={() => loadTurnRows(turn.key)}
+                      onRunSql={hasCapability(profile.capabilities, 'rerun_sql') ? (sql) => runSqlFor(turn.key, sql) : undefined}
+                      onRerun={() => void loadTurnRows(turn.key)}
+                    />
+                  </div>
+                ))}
+                {!activeThread && !busy && turns.length === 0 && (
                   <div className="conversation-empty">
                     <span className="eyebrow">ASK YOUR DATA</span>
                     <h1>What would you like to know?</h1>
@@ -690,7 +858,10 @@ function App() {
                   <AnswerPanel
                     run={run}
                     onAsk={(question) => void submitQuestion(question)}
+                    actions={answerActions(run)}
+                    onFeedback={(rating) => sendFeedback(run.messageId, rating)}
                     onRerun={() => void submitQuestion(activeThread ?? '')}
+                    onRunSql={hasCapability(profile.capabilities, 'rerun_sql') ? (sql) => runSqlFor(null, sql) : undefined}
                   />
                 )}
               </div>
@@ -736,7 +907,10 @@ function App() {
           <main className="placeholder-main">
           <header className="workspace-topbar">
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
-            <span className="local-status"><i />Local only · PostgreSQL</span>
+            <div className="topbar-actions">
+              <span className="local-status"><i />Local only · PostgreSQL</span>
+              <ThemeToggle onTheme={setTheme} resolved={resolvedTheme} />
+            </div>
           </header>
           {activePage === 'Setup' ? <SetupWizard
             apiRequest={apiRequest}
@@ -759,7 +933,10 @@ function App() {
           <main className="placeholder-main">
           <header className="workspace-topbar">
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
-            <span className="local-status"><i />Local only · PostgreSQL</span>
+            <div className="topbar-actions">
+              <span className="local-status"><i />Local only · PostgreSQL</span>
+              <ThemeToggle onTheme={setTheme} resolved={resolvedTheme} />
+            </div>
           </header>
           {!visibleNavigation.some(({ page }) => page === activePage) ? (
             <section className="placeholder-content">
@@ -767,6 +944,20 @@ function App() {
               <p role="alert">Your role does not include the capability needed for {activePage}.</p>
               <button className="primary-action" onClick={() => setActivePage('Home')} type="button">Return to Home</button>
             </section>
+          ) : activePage === 'Shared with me' ? (
+            <SharedWithMeScreen apiRequest={apiRequest} />
+          ) : activePage === 'Drift and profiling' ? (
+            <DriftScreen
+              apiRequest={apiRequest}
+              canEditModel={hasCapability(profile.capabilities, 'edit_mdl')}
+              key={selectedProjectId ?? 'none'}
+              onOpenModel={() => setActivePage('Connect and model')}
+              projectId={selectedProjectId ?? undefined}
+            />
+          ) : activePage === 'Audit' ? (
+            <AuditScreen apiRequest={apiRequest} />
+          ) : activePage === 'Evaluation' ? (
+            <EvaluationScreen apiRequest={apiRequest} key={selectedProjectId ?? 'none'} projectId={selectedProjectId ?? undefined} />
           ) : activePage === 'Knowledge' ? (
             <KnowledgeScreen
               apiRequest={apiRequest}
@@ -793,7 +984,10 @@ function App() {
           <main className="placeholder-main">
           <header className="workspace-topbar">
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
-            <span className="local-status"><i />Local only · acme-db-01.internal</span>
+            <div className="topbar-actions">
+              <span className="local-status"><i />Local only · acme-db-01.internal</span>
+              <ThemeToggle onTheme={setTheme} resolved={resolvedTheme} />
+            </div>
           </header>
           <section className="placeholder-content">
             <span className="eyebrow">PROJECT WORKSPACE</span>

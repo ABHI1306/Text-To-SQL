@@ -1,3 +1,4 @@
+import dataclasses
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Annotated
@@ -9,10 +10,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.adapters.identity.ldap import LdapConfig, LdapDirectory
 from app.adapters.identity.oidc import OidcConfig, OidcProvider
 from app.adapters.llm.ollama_embedder import OllamaEmbedderAdapter
+from app.adapters.metadata.collab import PostgresCollabStore
 from app.adapters.metadata.governance import PostgresGovernanceRepository
 from app.adapters.metadata.knowledge import PostgresKnowledgeRepository
 from app.adapters.metadata.oidc_state import PostgresOidcStateStore
 from app.adapters.metadata.postgres import PostgresMetadataRepository
+from app.adapters.metadata.threads import PostgresThreadStore
 from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
@@ -22,6 +25,8 @@ from app.auth.service import (
     AuthService,
     PasswordChangeRequired,
 )
+from app.collab.runtime import runtime_factory
+from app.collab.service import CollabService
 from app.config import Settings, get_settings
 from app.knowledge.service import KnowledgeService
 
@@ -188,6 +193,17 @@ def get_governance_repository() -> PostgresGovernanceRepository:
 
 
 @lru_cache
+def get_thread_store() -> PostgresThreadStore:
+    settings = get_settings()
+    if not settings.metadata_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Metadata database is not configured",
+        )
+    return PostgresThreadStore(settings.metadata_database_url)
+
+
+@lru_cache
 def get_knowledge_repository() -> PostgresKnowledgeRepository:
     settings = get_settings()
     if not settings.metadata_database_url:
@@ -223,3 +239,49 @@ def get_audit_service(
 def require_project_access(context: AuthContext, project_id: UUID) -> None:
     if str(project_id) not in context.project_ids:
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+@lru_cache
+def get_collab_store() -> PostgresCollabStore:
+    settings = get_settings()
+    if not settings.metadata_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Metadata database is not configured",
+        )
+    return PostgresCollabStore(settings.metadata_database_url)
+
+
+ALLOWED_HOSTS_SETTING = "allowed_database_hosts"
+
+
+def effective_settings() -> Settings:
+    """Settings with the DBA-edited host allowlist applied over DB_HOST_ALLOWLIST."""
+    settings = get_settings()
+    try:
+        hosts = get_collab_store().get_setting(ALLOWED_HOSTS_SETTING)
+    except Exception:  # noqa: BLE001 - fall back to the environment seed
+        return settings
+    if isinstance(hosts, list) and all(isinstance(host, str) for host in hosts):
+        return dataclasses.replace(settings, allowed_database_hosts=tuple(hosts))
+    return settings
+
+
+def get_collab_service(
+    store: Annotated[PostgresCollabStore, Depends(get_collab_store)],
+    repository: Annotated[PostgresMetadataRepository, Depends(get_repository)],
+    governance: Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)],
+    audit: Annotated[AuditService, Depends(get_audit_service)],
+) -> CollabService:
+    from app.adapters.metadata.scheduler import PostgresJobStore
+
+    settings = get_settings()
+    return CollabService(
+        store,
+        PostgresJobStore(settings.metadata_database_url),
+        runtime_factory(repository, governance, settings),
+        audit,
+        user_exists=lambda user_id: repository.get_auth_context(user_id) is not None,
+        role_exists=lambda name: repository.get_role_capabilities(name) is not None,
+        cache_seconds=settings.result_cache_seconds,
+    )

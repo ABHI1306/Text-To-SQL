@@ -57,8 +57,8 @@ test('notification bell shows no made-up unread count', async ({ page }) => {
 })
 
 test('mobile layout offers a bottom bar with Home, Shared with me and Dashboards', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
-  await page.getByRole('button', { name: 'Mobile 390' }).click()
   const bar = page.getByRole('navigation', { name: 'Mobile navigation' })
   await expect(bar).toBeVisible()
   await expect(bar.getByRole('button')).toHaveText([/Home/, /Shared with me/, /Dashboards/])
@@ -68,7 +68,7 @@ test('mobile layout offers a bottom bar with Home, Shared with me and Dashboards
   await expect(page.getByRole('heading', { name: 'Dashboards' })).toBeVisible()
   await expect(bar.getByRole('button', { name: /Dashboards/ })).toHaveAttribute('aria-current', 'page')
 
-  await page.getByRole('button', { name: 'Desktop 1280' }).click()
+  await page.setViewportSize({ width: 1280, height: 800 })
   await expect(bar).toBeHidden()
 })
 

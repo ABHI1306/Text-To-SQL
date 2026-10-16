@@ -384,6 +384,7 @@ def _audit_json(record: AuditRecord) -> dict[str, Any]:
 
 
 @router.get("/audit", tags=["Audit"])
+@router.get("/audit-events", tags=["Audit"])
 def browse_audit(
     _context: ViewAuditContext,
     audit: AuditDependency,
@@ -412,6 +413,68 @@ def browse_audit(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"items": [_audit_json(item) for item in page.items], "nextCursor": page.next_cursor}
+
+
+EXPORT_ROW_LIMIT = 10_000
+_CSV_COLUMNS = ("id", "created_at", "actor_id", "action", "resource_type", "resource_id", "details")
+
+
+def _csv_cell(value: object) -> str:
+    """One CSV cell; a leading =, +, - or @ would run as a formula in a spreadsheet."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in {"=", "+", "-", "@", "\t", "\r"} else text
+
+
+@router.get("/audit-events/export.csv", tags=["Audit"])
+def export_audit_csv(
+    _context: ViewAuditContext,
+    audit: AuditDependency,
+    actor_id: Annotated[UUID | None, Query()] = None,
+    action: Annotated[str | None, Query(max_length=128)] = None,
+    resource_type: Annotated[str | None, Query(max_length=64)] = None,
+    resource_id: Annotated[str | None, Query(max_length=128)] = None,
+    since: Annotated[datetime | None, Query()] = None,
+    until: Annotated[datetime | None, Query()] = None,
+) -> Response:
+    """The filtered audit log as CSV, newest first, capped at EXPORT_ROW_LIMIT rows."""
+    import csv
+    import io
+    import json
+
+    filters = AuditFilter(
+        actor_id=str(actor_id) if actor_id else None,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        since=since,
+        until=until,
+    )
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(_CSV_COLUMNS)
+    written, cursor = 0, None
+    try:
+        while written < EXPORT_ROW_LIMIT:
+            page = audit.browse(filters, limit=200, before_id=cursor)
+            for item in page.items:
+                writer.writerow([
+                    item.id, item.created_at.isoformat(), _csv_cell(item.actor_id),
+                    _csv_cell(item.action), _csv_cell(item.resource_type),
+                    _csv_cell(item.resource_id),
+                    _csv_cell(json.dumps(dict(item.details), default=str, sort_keys=True)),
+                ])
+                written += 1
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    audit.record(_context.user_id, "audit_exported", "audit", "csv", {"rows": written})
+    return Response(
+        out.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="audit-events.csv"'},
+    )
 
 
 class MappingItem(BaseModel):

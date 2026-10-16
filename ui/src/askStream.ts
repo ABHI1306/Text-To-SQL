@@ -24,6 +24,12 @@ export type AnswerRun = {
   error?: { code: string; message: string; retryable: boolean }
   clarification?: { question: string; options: string[] }
   suggestions: string[]
+  /** Summary text of the answer (streamed as `answer_token`, or saved with a past turn). */
+  summary: string
+  /** Id of the saved message, used for feedback and for recomputing a past answer's rows. */
+  messageId: string | null
+  /** Version of the deployed model the answer ran against. */
+  modelVersion: number | null
 }
 
 export const emptyRun = (question: string): AnswerRun => ({
@@ -38,6 +44,9 @@ export const emptyRun = (question: string): AnswerRun => ({
   retrievedModels: [],
   totalMs: 0,
   suggestions: [],
+  summary: '',
+  messageId: null,
+  modelVersion: null,
 })
 
 /** Split a buffer of server-sent events into parsed events and the unfinished remainder. */
@@ -79,6 +88,18 @@ export function applyEvent(run: AnswerRun, event: AskEvent): AnswerRun {
     { id: `${run.steps.length}-${type}`, title, detail, ok, ms },
   ]
   switch (type) {
+    case 'intent':
+      return {
+        ...run,
+        steps: step(
+          'Intent',
+          data.used_context === true
+            ? `Follow-up, read as: ${String(data.standalone_question ?? '')}`
+            : String(data.intent ?? '').replaceAll('_', ' '),
+        ),
+      }
+    case 'answer_token':
+      return { ...run, summary: run.summary + String(data.text ?? '') }
     case 'retrieval': {
       const models = Array.isArray(data.models) ? data.models.map(String) : []
       return { ...run, retrievedModels: models, steps: step('Retrieval', models.join(', ') || 'No models') }
@@ -94,12 +115,12 @@ export function applyEvent(run: AnswerRun, event: AskEvent): AnswerRun {
       return {
         ...run,
         compiledSql: ok && typeof data.sql === 'string' ? data.sql : run.compiledSql,
-        steps: step('Compile', ok ? 'Row policies applied' : issues(data.errors), ok),
+        steps: step('Compilation', ok ? 'Row policies applied' : issues(data.errors), ok),
       }
     }
     case 'validation': {
       const ok = data.ok === true
-      return { ...run, steps: step('Validate', ok ? 'Single read-only query; dry run passed' : issues(data.errors), ok) }
+      return { ...run, steps: step('Validation', ok ? 'Single read-only query; dry run passed' : issues(data.errors), ok) }
     }
     case 'correction':
       return { ...run, steps: step('Correction', `Attempt ${String(data.attempt ?? '')}: ${String(data.reason ?? '')}`, false) }
@@ -125,7 +146,13 @@ export function applyEvent(run: AnswerRun, event: AskEvent): AnswerRun {
         },
       }
     case 'done':
-      return { ...run, status: 'done', totalMs: typeof data.latency_ms === 'number' ? data.latency_ms : run.totalMs }
+      return {
+        ...run,
+        status: 'done',
+        messageId: typeof data.message_id === 'string' ? data.message_id : run.messageId,
+        modelVersion: typeof data.model_version === 'number' ? data.model_version : run.modelVersion,
+        totalMs: typeof data.latency_ms === 'number' ? data.latency_ms : run.totalMs,
+      }
     case 'error':
       return {
         ...run,
@@ -141,17 +168,67 @@ export function applyEvent(run: AnswerRun, event: AskEvent): AnswerRun {
   }
 }
 
-/** POST the question and feed each event to `onRun` as it arrives. */
+export type ThreadSummary = { id: string; title: string; turns: number; last_activity: string }
+
+type SavedMessage = {
+  id: string
+  question: string
+  logical_sql: string | null
+  answer: string | null
+  summary: string | null
+  suggestions: string[]
+  latency_ms: number | null
+  failure: { code: string; message: string } | null
+  trace?: { steps?: { title: string; detail: string; ok: boolean; ms: number }[]; models?: string[] } | null
+  model_version?: number | null
+}
+
+export type PastTurn = { key: string; question: string; run: AnswerRun }
+
+/** A saved message as a finished run. Rows are not stored: the panel offers "Show results". */
+export function runFromMessage(message: SavedMessage): AnswerRun {
+  return {
+    ...emptyRun(message.question),
+    status: message.failure ? 'error' : 'done',
+    logicalSql: message.logical_sql,
+    summary: message.summary ?? message.answer ?? '',
+    suggestions: message.suggestions ?? [],
+    messageId: message.id,
+    modelVersion: message.model_version ?? null,
+    retrievedModels: message.trace?.models ?? [],
+    steps: (message.trace?.steps ?? []).map((item, index) => ({
+      id: `${index}-${item.title}`,
+      title: item.title,
+      detail: item.detail,
+      ok: item.ok,
+      ms: item.ms,
+    })),
+    totalMs: message.latency_ms ?? 0,
+    error: message.failure
+      ? { code: message.failure.code, message: message.failure.message, retryable: false }
+      : undefined,
+  }
+}
+
+export function turnsFromThread(body: { messages: SavedMessage[] }): PastTurn[] {
+  return body.messages.map((message) => ({
+    key: message.id,
+    question: message.question,
+    run: runFromMessage(message),
+  }))
+}
+
+/** POST the question to a conversation and feed each event to `onRun` as it arrives. */
 export async function streamQuestion(
   request: ApiRequest,
-  projectId: string,
+  threadId: string,
   question: string,
   onRun: (run: AnswerRun) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   let run = emptyRun(question)
   onRun(run)
-  const response = await request(`/api/v1/projects/${projectId}/query/stream`, {
+  const response = await request(`/api/v1/threads/${threadId}/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ question }),
@@ -210,4 +287,29 @@ export function chartModel(columns: string[], rows: unknown[][]): ChartModel | n
       values: rows.map((row) => asNumber(row[index]) ?? 0),
     })),
   }
+}
+
+export type ThreadGroup = { label: string; threads: ThreadSummary[] }
+
+/** Sidebar groups, newest first: Today, Yesterday, then Earlier (as in the design reference). */
+export function groupThreads(threads: ThreadSummary[], now: Date = new Date()): ThreadGroup[] {
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const today = startOfDay(now)
+  const day = 24 * 60 * 60 * 1000
+  const groups: ThreadGroup[] = [
+    { label: 'Today', threads: [] },
+    { label: 'Yesterday', threads: [] },
+    { label: 'Earlier', threads: [] },
+  ]
+  for (const thread of threads) {
+    const when = new Date(thread.last_activity).getTime()
+    const index = Number.isNaN(when) || startOfDay(new Date(when)) < today - day ? 2 : startOfDay(new Date(when)) < today ? 1 : 0
+    groups[index].threads.push(thread)
+  }
+  return groups.filter((group) => group.threads.length > 0)
+}
+
+/** "0.3 s" style duration used in the Steps card. */
+export function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)} s`
 }
