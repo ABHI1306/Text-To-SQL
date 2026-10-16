@@ -2946,6 +2946,10 @@ td:first-child {
   background: #fff;
   box-shadow: 0 8px 24px rgba(30, 36, 60, 0.14);
   list-style: none;
+  /* A long project list scrolls inside the menu instead of running off the screen. */
+  max-height: min(60vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .project-menu-item {
@@ -4245,3 +4249,12 @@ button.trace-heading {
   outline: 2px solid #4c53b7;
   outline-offset: 2px;
 }
+
+/* Day 8: dashboards, scheduled questions and the sharing dialog */
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+.tile-card figcaption { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.share-dialog { border: 1px solid var(--border, currentColor); border-radius: 8px; padding: 1rem; margin: 0.75rem 0; }
+.status-pill.error { color: var(--danger, #b42318); }
+.notice-panel { position: absolute; right: 1rem; top: 3.5rem; z-index: 20; width: min(420px, 92vw); max-height: 70vh; overflow: auto; padding: 1rem; border: 1px solid var(--border, currentColor); border-radius: 8px; background: var(--surface, Canvas); }
+.notice { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0; }
+.notice.read { opacity: 0.6; }

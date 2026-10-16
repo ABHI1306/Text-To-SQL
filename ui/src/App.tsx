@@ -4,6 +4,7 @@ import { hasCapability } from './api/access'
 import type { components } from './api/schema'
 import { AnswerPanel } from './AnswerPanel'
 import { AuditScreen } from './AuditScreen'
+import { DashboardsScreen } from './DashboardsScreen'
 import { DriftScreen } from './DriftScreen'
 import { EvaluationScreen } from './EvaluationScreen'
 import { callApi } from './adminApi'
@@ -20,10 +21,13 @@ import {
 } from './askStream'
 import { KnowledgeScreen } from './KnowledgeScreen'
 import { ModelCanvas } from './ModelCanvas'
+import { ShareDialog } from './ShareDialog'
+import { NotificationsPanel } from './NotificationsPanel'
 import { PasswordField } from './PasswordField'
 import { ProfileMenu } from './ProfileMenu'
 import { RowPoliciesScreen } from './RowPoliciesScreen'
 import { SetupWizard } from './SetupWizard'
+import { ScheduledScreen } from './ScheduledScreen'
 import { SharedWithMeScreen } from './SharedWithMeScreen'
 import { UsersRolesScreen } from './UsersRolesScreen'
 import './App.css'
@@ -62,6 +66,8 @@ const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capa
 
 const adminPages: Page[] = [
   'Shared with me',
+  'Dashboards',
+  'Scheduled questions',
   'Drift and profiling',
   'Knowledge',
   'Row policies',
@@ -132,6 +138,7 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(readStoredProject)
   const [addingProject, setAddingProject] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const switcherRef = useRef<HTMLDivElement>(null)
   const [activeThread, setActiveThread] = useState<string | null>(null)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [threadId, setThreadId] = useState<string | null>(null)
@@ -147,6 +154,7 @@ function App() {
   const [theme, setTheme, resolvedTheme] = useTheme()
   const [methods, setMethods] = useState<{ directory: boolean; sso: boolean }>({ directory: false, sso: false })
   const [notificationCount, setNotificationCount] = useState(0)
+  const [noticesOpen, setNoticesOpen] = useState(false)
 
   useEffect(() => {
     fetch('/api/v1/auth/methods')
@@ -224,6 +232,16 @@ function App() {
     }
     return response
   }, [accessToken, restoreAccessToken])
+
+  // The project menu closes on any click outside it, so it never sits under the profile menu.
+  useEffect(() => {
+    if (!switcherOpen) return
+    const close = (event: MouseEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(event.target as Node)) setSwitcherOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [switcherOpen])
 
   useEffect(() => {
     if (!profile) return
@@ -472,16 +490,9 @@ function App() {
       }
     }
     if (hasCapability(capabilities, 'share')) {
-      actions.share = async (granteeType, grantee) => {
-        if (!threadId) throw new Error('Ask a question first')
-        await callApi(apiRequest, '/api/v1/shares', 'POST', {
-          resource_type: 'thread',
-          resource_id: threadId,
-          grantee_type: granteeType,
-          grantee_id: grantee,
-        })
-        return 'Shared read-only. They see answers computed with their own data access.'
-      }
+      actions.shareDialog = (onClose) => threadId
+        ? <ShareDialog apiRequest={apiRequest} onClose={onClose} resource={{ type: 'thread', id: threadId, title: answer.question }} />
+        : <p className="action-note error" role="alert">Ask a question first.</p>
     }
     return actions
   }
@@ -689,6 +700,7 @@ function App() {
           </a>
           <div
             className="project-switcher-wrap"
+            ref={switcherRef}
             onKeyDown={(event) => { if (event.key === 'Escape') setSwitcherOpen(false) }}
           >
             <button
@@ -772,10 +784,13 @@ function App() {
               <button
                 className="icon-button notification-button"
                 type="button"
+                aria-expanded={noticesOpen}
                 aria-label={notificationCount ? `Notifications, ${notificationCount} unread` : 'Notifications'}
+                onClick={() => setNoticesOpen((value) => !value)}
               >
                 ♧{notificationCount > 0 && <b>{notificationCount}</b>}
               </button>
+              {noticesOpen && <NotificationsPanel apiRequest={apiRequest} onUnreadChange={setNotificationCount} />}
             </div>
           </header>
           {error && <div className="profile-error" role="alert">{error}</div>}
@@ -946,6 +961,10 @@ function App() {
             </section>
           ) : activePage === 'Shared with me' ? (
             <SharedWithMeScreen apiRequest={apiRequest} />
+          ) : activePage === 'Dashboards' ? (
+            <DashboardsScreen apiRequest={apiRequest} key={selectedProjectId ?? 'none'} projectId={selectedProjectId ?? undefined} />
+          ) : activePage === 'Scheduled questions' ? (
+            <ScheduledScreen apiRequest={apiRequest} key={selectedProjectId ?? 'none'} projectId={selectedProjectId ?? undefined} />
           ) : activePage === 'Drift and profiling' ? (
             <DriftScreen
               apiRequest={apiRequest}

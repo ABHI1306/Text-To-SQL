@@ -21,6 +21,10 @@ class AuthRepository(Protocol):
 
     def clear_login_failures(self, user_id: str) -> None: ...
 
+    def session_is_alive(self, session_id: str, now: datetime) -> bool:
+        """True while the session's refresh-token family has an unrevoked, unexpired member."""
+        ...
+
     def create_session(
         self,
         *,

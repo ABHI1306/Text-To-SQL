@@ -94,6 +94,8 @@ class OidcLoginService:
     def begin(self, client_key: str) -> AuthorizationRequest:
         if not self._auth.external_login_allowed(client_key):
             raise AuthenticationError("Too many sign-in attempts")
+        if not self._auth.external_begin_allowed(client_key):
+            raise AuthenticationError("Too many sign-in attempts")
         try:
             request = self._provider.begin()
         except IdentityUnavailable as error:

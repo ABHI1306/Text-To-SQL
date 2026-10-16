@@ -13,6 +13,7 @@ from app.api.dependencies import (
     get_current_context,
     get_governance_repository,
     get_repository,
+    get_thread_store,
 )
 from app.api.routes import router
 from app.auth.models import AuthContext
@@ -232,6 +233,8 @@ def _ask_client(monkeypatch, capabilities: set[str]):  # type: ignore[no-untyped
                 "small_model": "",
                 "warehouse_statement_timeout_ms": 10000,
                 "warehouse_max_rows": 1000,
+                "warehouse_pool_max_size": 0,
+                "retrieval_cache_seconds": 0,
             },
         )(),
     )
@@ -246,6 +249,7 @@ def _ask_client(monkeypatch, capabilities: set[str]):  # type: ignore[no-untyped
     app.dependency_overrides[get_repository] = lambda: repository
     app.dependency_overrides[get_governance_repository] = lambda: FakeGovernance()
     app.dependency_overrides[get_audit_service] = lambda: audit
+    app.dependency_overrides[get_thread_store] = lambda: InMemoryThreadStore()
     FakeWarehouse.queries.clear()
     return TestClient(app), audit
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -44,6 +45,9 @@ class LoginRepository:
 
     def clear_login_failures(self, user_id: str) -> None:
         del user_id
+
+    def session_is_alive(self, session_id: str, now: datetime) -> bool:
+        return True
 
     def create_session(
         self,
@@ -180,7 +184,16 @@ def test_role_routes_enforce_manage_roles_capability() -> None:
 
 def test_user_manager_cannot_assign_a_role_with_unheld_capabilities() -> None:
     class RoleRepository:
+        def get_auth_context(self, user_id: str) -> AuthContext | None:
+            return AuthContext(
+                user_id=user_id, username="target", role_name="Clerk",
+                capabilities=frozenset(), project_ids=frozenset(),
+                must_change_password=False,
+            )
+
         def get_role_capabilities(self, role_name: str) -> frozenset[str] | None:
+            if role_name == "Clerk":
+                return frozenset({"manage_users"})
             return frozenset({"manage_users", "manage_roles", "deploy_mdl"})
 
         def set_user_role(self, user_id: str, role_name: str) -> None:
@@ -199,6 +212,9 @@ def test_user_manager_cannot_assign_a_role_with_unheld_capabilities() -> None:
     app.dependency_overrides[get_current_context] = lambda: context
     app.dependency_overrides[get_repository] = lambda: RoleRepository()
     app.dependency_overrides[get_audit_service] = lambda: RecordingAudit()
+    app.dependency_overrides[get_auth_service] = lambda: SimpleNamespace(
+        invalidate_auth_context=lambda *_: None, invalidate_all_auth_contexts=lambda: None
+    )
 
     with TestClient(app) as client:
         response = client.put(

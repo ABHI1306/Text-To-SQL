@@ -1,0 +1,15 @@
+[0mecom-01  wrong_rows          141.9s  attempts=0
+ecom-02  failed              163.5s  attempts=3
+ecom-03  wrong_rows          210.5s  attempts=3
+ecom-04  correct              82.0s  attempts=0
+ecom-05  wrong_rows          138.8s  attempts=0
+ecom-06  correct             132.6s  attempts=0
+ecom-07  wrong_rows          137.2s  attempts=0
+ecom-08  wrong_rows          141.0s  attempts=0
+ecom-09  wrong_rows          184.8s  attempts=2
+ecom-10  wrong_rows          175.5s  attempts=2
+ecom-12  failed              161.8s  attempts=3
+ecom-14  reference_invalid   158.7s  attempts=3
+ecom-15  reference_invalid   158.5s  attempts=1
+ecom-16  reference_invalid   207.3s  attempts=3
+Error: executing /usr/libexec/docker/cli-plugins/docker-compose exec -T -e PYTHONPATH=/app api uv run --no-sync python scripts/evaluate_execution.py --project-id 8afcce4b-e517-4960-bbce-2253b7f7198f --username abhijit.dba --include-draft --case-prefix ecom-: exit status 137

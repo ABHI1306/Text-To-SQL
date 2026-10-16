@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.metadata.collab import PostgresCollabStore
+from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.adapters.metadata.threads import PostgresThreadStore
 from app.api.dependencies import (
     ALLOWED_HOSTS_SETTING,
@@ -18,9 +19,11 @@ from app.api.dependencies import (
     get_collab_service,
     get_collab_store,
     get_current_context,
+    get_repository,
     get_thread_store,
     require_capability,
 )
+from app.api.rate_limit import RUN_NOW_PER_MINUTE, VIEW_PER_MINUTE
 from app.api.security import validate_allowed_hosts
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
@@ -32,11 +35,18 @@ router = APIRouter(prefix="/api/v1")
 
 CollabDependency = Annotated[CollabService, Depends(get_collab_service)]
 StoreDependency = Annotated[PostgresCollabStore, Depends(get_collab_store)]
+RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
 ThreadsDependency = Annotated[PostgresThreadStore, Depends(get_thread_store)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 BuildContext = Annotated[AuthContext, Depends(require_capability("create_dashboard"))]
-ViewContext = Annotated[AuthContext, Depends(require_capability("view_shared"))]
+ViewContext = Annotated[
+    AuthContext, Depends(require_capability("view_shared", per_minute=VIEW_PER_MINUTE))
+]
 ScheduleContext = Annotated[AuthContext, Depends(require_capability("schedule_question"))]
+RunNowContext = Annotated[
+    AuthContext,
+    Depends(require_capability("schedule_question", per_minute=RUN_NOW_PER_MINUTE)),
+]
 ShareContext = Annotated[AuthContext, Depends(require_capability("share"))]
 ConnectionContext = Annotated[AuthContext, Depends(require_capability("manage_connection"))]
 SignedIn = Annotated[AuthContext, Depends(get_current_context)]
@@ -292,7 +302,7 @@ def delete_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDepe
 @router.post("/scheduled-questions/{job_id}/run-now", tags=["Scheduled questions"])
 def run_now(
     job_id: UUID,
-    context: ScheduleContext,
+    context: RunNowContext,
     service: CollabDependency,
     idempotency_key: Annotated[str | None, Header(max_length=200)] = None,
 ) -> dict[str, Any]:
@@ -341,6 +351,25 @@ def _thread_owner(threads: PostgresThreadStore) -> Any:
         return (record.user_id, record.project_id) if record else None
 
     return lookup
+
+
+@router.get("/share-targets", tags=["Sharing"])
+def share_targets(
+    context: ShareContext, repository: RepositoryDependency
+) -> dict[str, list[dict[str, str]]]:
+    """Who a share can be granted to: active accounts (never the caller) and roles that can
+    open shared items. Only ids and names are returned."""
+    users = [
+        {"id": str(user["id"]), "username": str(user["username"]), "role": str(user["role"])}
+        for user in repository.list_users()
+        if user["status"] == "active" and str(user["id"]) != context.user_id
+    ]
+    roles = [
+        {"name": str(role["name"])}
+        for role in repository.list_roles()
+        if "view_shared" in cast(list[str], role["capabilities"] or [])
+    ]
+    return {"users": users, "roles": roles}
 
 
 @router.get("/shares", tags=["Sharing"])

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 
 import { chartModel, seconds, type AnswerRun, type ChartModel } from './askStream'
 
@@ -112,7 +112,7 @@ function SqlText({ sql }: { sql: string }) {
 export type AnswerActions = {
   pin?: () => Promise<string>
   schedule?: (preset: 'hourly' | 'daily' | 'weekly') => Promise<string>
-  share?: (granteeType: 'user' | 'role', grantee: string) => Promise<string>
+  shareDialog?: (onClose: () => void) => ReactNode
 }
 
 export function AnswerPanel({
@@ -145,8 +145,6 @@ export function AnswerPanel({
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
   const [panel, setPanel] = useState<'schedule' | 'share' | null>(null)
-  const [grantee, setGrantee] = useState('')
-  const [granteeType, setGranteeType] = useState<'user' | 'role'>('role')
   const chart = useMemo(() => chartModel(run.columns, run.rows), [run.columns, run.rows])
   const sum = run.steps.reduce((total, step) => total + step.ms, 0)
   const hasRows = run.columns.length > 0
@@ -383,7 +381,7 @@ export function AnswerPanel({
             {actions?.schedule && (
               <button aria-expanded={panel === 'schedule'} onClick={() => setPanel(panel === 'schedule' ? null : 'schedule')} type="button">Schedule this question</button>
             )}
-            {actions?.share && (
+            {actions?.shareDialog && (
               <button aria-expanded={panel === 'share'} onClick={() => setPanel(panel === 'share' ? null : 'share')} type="button">Share</button>
             )}
           </div>
@@ -395,20 +393,7 @@ export function AnswerPanel({
               ))}
             </div>
           )}
-          {panel === 'share' && actions?.share && (
-            <form
-              className="action-panel"
-              aria-label="Share this conversation"
-              onSubmit={(event) => { event.preventDefault(); void attempt('share', () => actions.share!(granteeType, grantee.trim())) }}
-            >
-              <select aria-label="Share with" onChange={(event) => setGranteeType(event.target.value as 'user' | 'role')} value={granteeType}>
-                <option value="role">A role (name)</option>
-                <option value="user">A person (user id)</option>
-              </select>
-              <input aria-label="Who to share with" onChange={(event) => setGrantee(event.target.value)} placeholder={granteeType === 'role' ? 'e.g. Analyst' : 'user id'} value={grantee} />
-              <button disabled={!grantee.trim() || busy === 'share'} type="submit">Share read-only</button>
-            </form>
-          )}
+          {panel === 'share' && actions?.shareDialog && actions.shareDialog(() => setPanel(null))}
           {note && <p className={`action-note${note.error ? ' error' : ''}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
         </>
       )}

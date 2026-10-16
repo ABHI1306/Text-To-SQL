@@ -6,8 +6,12 @@ same compiler, row policies, validator and limits apply as for a question.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from threading import Lock
 
 from app.agent.graph import classify_execution_error
 from app.agent.state import StructuredFailure
@@ -45,15 +49,74 @@ def failure_from(errors: Sequence[CompileError]) -> StructuredFailure:
     )
 
 
+class CompileCache:
+    """Compiled output reused for the same question text, model, policies and principal.
+
+    The key is a hash of everything the compiler reads (the logical SQL, the whole model, every
+    enabled policy, and the principal's id, role and attributes), so one user's compiled SQL,
+    which embeds their policy values, is never served to another. Only successes are kept.
+    """
+
+    def __init__(self, max_entries: int = 256) -> None:
+        self._max = max_entries
+        self._items: OrderedDict[str, CompiledQuery] = OrderedDict()
+        self._lock = Lock()
+
+    @staticmethod
+    def key(
+        logical_sql: str, mdl: Mdl, principal: Principal, policies: Sequence[RowPolicy]
+    ) -> str:
+        payload = json.dumps(
+            [
+                logical_sql,
+                mdl.model_dump(mode="json", by_alias=True),
+                [policy.model_dump(mode="json", by_alias=True) for policy in policies],
+                [principal.user_id, principal.role_name, dict(principal.attributes)],
+            ],
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def get(self, key: str) -> CompiledQuery | None:
+        with self._lock:
+            found = self._items.get(key)
+            if found is not None:
+                self._items.move_to_end(key)
+            return found
+
+    def put(self, key: str, compiled: CompiledQuery) -> None:
+        with self._lock:
+            self._items[key] = compiled
+            self._items.move_to_end(key)
+            while len(self._items) > self._max:
+                self._items.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+
+compile_cache = CompileCache()
+
+
 def compile_for(
     logical_sql: str, mdl: Mdl, principal: Principal, policies: Sequence[RowPolicy]
 ) -> CompiledQuery | tuple[CompileError, ...]:
     """The compiled query, or the errors; an unexpected compiler error fails closed."""
+    key = CompileCache.key(logical_sql, mdl, principal, policies)
+    cached = compile_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         compiled = compile_query(logical_sql, mdl, principal, policies)
     except Exception:  # noqa: BLE001 - fail closed, typed
         return (CompileError(CompileErrorCode.SYNTAX_ERROR, "the query could not be compiled"),)
-    return compiled if compiled.ok else tuple(compiled.errors)
+    if not compiled.ok:
+        return tuple(compiled.errors)
+    compile_cache.put(key, compiled)
+    return compiled
 
 
 def execute_compiled(

@@ -26,6 +26,7 @@ from app.domain.policy import ATTRIBUTE_PLACEHOLDER, RowPolicy
 
 DIALECT = "postgres"
 DEFAULT_LIMIT = 1000
+HARD_LIMIT = 10_001  # the largest row cap the API allows (10,000) plus the truncation probe
 MODEL_CTE_PREFIX = "m_"
 METRIC_CTE_PREFIX = "metric_"
 MAX_CALCULATION_DEPTH = 10
@@ -162,6 +163,8 @@ class _Compilation:
         self._prepend_ctes(root, model_ctes)
         if not root.args.get("limit") and isinstance(root, exp.Query):
             root.limit(self.default_limit, copy=False)
+        else:
+            self._clamp_limit(root)
         sql = self._emit(root)
         return CompiledQuery(
             sql=sql,
@@ -171,6 +174,20 @@ class _Compilation:
             applied_policies=tuple(policy.name for policy, _ in self.applied),
             missing_attributes=tuple(dict.fromkeys(self.missing)),
         )
+
+    def _clamp_limit(self, root: exp.Expr) -> None:
+        """A written LIMIT is kept up to the hard ceiling, so one query cannot ask for billions."""
+        limit = root.args.get("limit")
+        if not isinstance(limit, exp.Limit):
+            return
+        count = limit.args.get("expression")
+        if (
+            isinstance(count, exp.Literal)
+            and not count.is_string
+            and count.this.isdigit()
+            and int(count.this) > HARD_LIMIT
+        ):
+            limit.set("expression", exp.Literal.number(HARD_LIMIT))
 
     # -------------------------------------------------------------- 1. parse and restrict
 

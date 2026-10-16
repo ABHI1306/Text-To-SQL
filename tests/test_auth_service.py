@@ -68,6 +68,15 @@ class MemoryAuthRepository:
     def clear_login_failures(self, user_id: str) -> None:
         del user_id
 
+    def session_is_alive(self, session_id: str, now: datetime) -> bool:
+        family = next(
+            (s["family_id"] for s in self.sessions.values() if s["session_id"] == session_id), None
+        )
+        return any(
+            s["family_id"] == family and not s["revoked"] and s["expires_at"] > now
+            for s in self.sessions.values()
+        )
+
     def create_session(
         self,
         *,
@@ -314,3 +323,41 @@ def test_authorization_context_cache_expires_within_one_minute(
     clock = 130.1
     assert service._cached_auth_context("user-1") is not None
     assert reads == 2
+
+
+def test_logout_ends_the_access_token_immediately() -> None:
+    repository = MemoryAuthRepository()
+    service = AuthService(repository, jwt_secret="unit-test-secret-that-is-at-least-32-bytes")
+    result = service.login("demo", "temporary-strong-password", "127.0.0.1")
+    assert service.authenticate_access_token(result.access_token).user_id == "user-1"
+
+    service.logout(result.refresh_token)
+
+    with pytest.raises(TokenError):
+        service.authenticate_access_token(result.access_token)
+
+
+def test_one_address_is_not_locked_out_by_a_few_failures_but_one_account_is() -> None:
+    repository = MemoryAuthRepository()
+    service = AuthService(
+        repository, jwt_secret="unit-test-secret-that-is-at-least-32-bytes", max_failures=5
+    )
+    for _ in range(5):
+        with pytest.raises(AuthenticationError):
+            service.login("demo", "wrong-password", "10.0.0.1")
+    # The account is now throttled, even for the right password...
+    with pytest.raises(AuthenticationError):
+        service.login("demo", "temporary-strong-password", "10.0.0.1")
+    # ...but another account from the same address (a shared proxy) is not.
+    with pytest.raises(AuthenticationError):
+        service.login("someone-else", "x", "10.0.0.1")
+    assert service._limiter.allow(("ip:10.0.0.1",))
+
+
+def test_starting_single_sign_on_is_limited_per_address() -> None:
+    service = AuthService(
+        MemoryAuthRepository(), jwt_secret="unit-test-secret-that-is-at-least-32-bytes"
+    )
+    assert all(service.external_begin_allowed("10.0.0.2") for _ in range(20))
+    assert not service.external_begin_allowed("10.0.0.2")
+    assert service.external_begin_allowed("10.0.0.3")

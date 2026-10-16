@@ -52,6 +52,8 @@ class Settings:
     result_cache_seconds: int = 300
     scheduler_lease_seconds: int = 300
     scheduler_worker_id: str = ""
+    retrieval_cache_seconds: int = 60
+    warehouse_pool_max_size: int = 5
 
 
 def get_settings() -> Settings:
@@ -110,6 +112,8 @@ def get_settings() -> Settings:
         result_cache_seconds=int(os.getenv("RESULT_CACHE_SECONDS", "300")),
         scheduler_lease_seconds=int(os.getenv("SCHEDULER_LEASE_SECONDS", "300")),
         scheduler_worker_id=os.getenv("SCHEDULER_WORKER_ID", ""),
+        retrieval_cache_seconds=int(os.getenv("RETRIEVAL_CACHE_SECONDS", "60")),
+        warehouse_pool_max_size=int(os.getenv("WAREHOUSE_POOL_MAX_SIZE", "5")),
     )
 
 

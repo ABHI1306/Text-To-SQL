@@ -16,6 +16,7 @@ from app.domain.mdl import Mdl
 from app.knowledge.service import KnowledgeService
 from app.ports.knowledge import KnowledgeRepoPort
 from app.ports.threads import ThreadStorePort
+from app.semantic.retrieval import RetrievalCache
 
 
 class MdlSource(Protocol):
@@ -40,6 +41,19 @@ def load_deployed_mdl(repository: MdlSource, project_id: str) -> tuple[int, Mdl]
     )
 
 
+_retrieval_cache: RetrievalCache | None = None
+
+
+def _shared_retrieval_cache(seconds: int) -> RetrievalCache | None:
+    """One cache for the whole process, because a service is built for every request."""
+    global _retrieval_cache
+    if seconds <= 0:
+        return None
+    if _retrieval_cache is None:
+        _retrieval_cache = RetrievalCache(seconds)
+    return _retrieval_cache
+
+
 def build_ask_service(
     dsn: str,
     ca_certificate: str | None,
@@ -62,6 +76,7 @@ def build_ask_service(
             statement_timeout_ms=settings.warehouse_statement_timeout_ms,
             max_rows=settings.warehouse_max_rows,
             ssl_ca_certificate=ca_certificate,
+            pool_max_size=settings.warehouse_pool_max_size,
         ),
         audit=audit,
         max_rows=settings.warehouse_max_rows,
@@ -69,5 +84,6 @@ def build_ask_service(
         summary_llm=small_llm,
         threads=threads,
         knowledge=KnowledgeService(knowledge, embedder, vector_store) if knowledge else None,
+        retrieval_cache=_shared_retrieval_cache(settings.retrieval_cache_seconds),
     )
     return service, vector_store.close

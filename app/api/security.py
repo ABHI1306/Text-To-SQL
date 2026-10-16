@@ -1,5 +1,6 @@
 import ipaddress
 import json
+import socket
 import time
 from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
@@ -101,16 +102,34 @@ _FORBIDDEN_NETWORKS = (
 _FORBIDDEN_NAMES = {"metadata.google.internal", "metadata", "instance-data"}
 
 
+def _address_is_forbidden(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    mapped = getattr(address, "ipv4_mapped", None)  # ::ffff:169.254.169.254 is the same host
+    if mapped is not None:
+        address = mapped
+    return any(address in network for network in _FORBIDDEN_NETWORKS)
+
+
 def host_is_forbidden(host: str) -> bool:
-    """Link-local and cloud metadata addresses stay refused whatever the allowlist says."""
+    """Link-local and cloud metadata addresses stay refused whatever the allowlist says.
+
+    A name is also refused when any address it resolves to is forbidden; a name that does not
+    resolve here is left to the connection attempt.
+    """
     normalized = host.rstrip(".").casefold()
     if normalized in _FORBIDDEN_NAMES:
         return True
     try:
-        address = ipaddress.ip_address(normalized)
+        return _address_is_forbidden(ipaddress.ip_address(normalized))
     except ValueError:
+        pass
+    try:
+        resolved = socket.getaddrinfo(normalized, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
         return False
-    return any(address in network for network in _FORBIDDEN_NETWORKS)
+    return any(
+        _address_is_forbidden(ipaddress.ip_address(str(info[4][0]).split("%")[0]))
+        for info in resolved
+    )
 
 
 def validate_allowed_hosts(hosts: list[str]) -> list[str]:
@@ -125,7 +144,13 @@ def validate_allowed_hosts(hosts: list[str]) -> list[str]:
                 network = ipaddress.ip_network(item, strict=False)
             except ValueError as error:
                 raise ValueError(f"Invalid network {raw!r}") from error
-            if any(network.overlaps(blocked) for blocked in _FORBIDDEN_NETWORKS):
+            mapped = getattr(network.network_address, "ipv4_mapped", None)
+            if mapped is not None and network.prefixlen >= 96:
+                network = ipaddress.ip_network(f"{mapped}/{network.prefixlen - 96}", strict=False)
+            if any(
+                network.version == blocked.version and network.overlaps(blocked)
+                for blocked in _FORBIDDEN_NETWORKS
+            ):
                 raise ValueError(f"{raw!r} includes link-local or metadata addresses")
         elif host_is_forbidden(item):
             raise ValueError(f"{raw!r} is a link-local or metadata address")

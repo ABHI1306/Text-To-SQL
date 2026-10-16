@@ -29,6 +29,7 @@ from app.ports.audit import AuditFilter, AuditRecord
 from app.ports.policy_repo import StoredPolicy
 from app.semantic.compiler import CompiledQuery, CompileError, compile_query
 from app.semantic.deploy_report import build_deploy_report
+from app.semantic.validator import validate_compiled_sql
 
 router = APIRouter(prefix="/api/v1")
 
@@ -105,6 +106,15 @@ def _load_principal(
         context.role_name == "DBA" or set(target.project_ids) & set(context.project_ids)
     ):
         raise HTTPException(status_code=404, detail="User not found")
+    if str(user_id) != context.user_id and context.role_name != "DBA":
+        # Seeing another account's rows is a row-policy decision: it is for policy managers, and
+        # never for an account the caller could not already act as.
+        if "manage_policies" not in context.capabilities:
+            raise HTTPException(status_code=403, detail="Missing capability: manage_policies")
+        if not set(target.capabilities) <= set(context.capabilities):
+            raise HTTPException(
+                status_code=403, detail="Cannot preview as an account holding more capabilities"
+            )
     return _principal(target)
 
 
@@ -156,6 +166,13 @@ def compile_preview(
     audit: AuditDependency,
 ) -> dict[str, object]:
     require_project_access(context, project_id)
+    if body.sample and (body.preview_as_user_id is None or body.mdl is not None):
+        # A sample reads the warehouse, so it must run as a named account's row policies and
+        # against the saved model, never against a model or identity the caller supplies.
+        raise HTTPException(
+            status_code=422,
+            detail="A sample needs a preview user and uses the saved model",
+        )
     if body.mdl is not None:
         mdl = body.mdl
     else:
@@ -193,18 +210,21 @@ def compile_preview(
             },
         )
     if compiled.ok and body.sample:
-        response["sample"] = _run_sample(repository, project_id, compiled)
+        response["sample"] = _run_sample(repository, project_id, compiled, mdl)
     return response
 
 
 def _run_sample(
-    repository: PostgresMetadataRepository, project_id: UUID, compiled: CompiledQuery
+    repository: PostgresMetadataRepository, project_id: UUID, compiled: CompiledQuery, mdl: Mdl
 ) -> dict[str, object]:
     from app.adapters.warehouse.postgres import PostgresWarehouseAdapter
     from app.api.routes import _project_connection_details
     from app.config import get_settings
     from app.core.types import ValidatedQuery
 
+    checked = validate_compiled_sql(compiled.sql, mdl)
+    if not checked.ok:
+        return {"error": "The compiled query did not pass validation"}
     settings = get_settings()
     _, dsn, ca_certificate = _project_connection_details(repository, project_id)
     try:

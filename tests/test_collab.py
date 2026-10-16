@@ -377,3 +377,40 @@ def test_a_scheduled_result_is_stored_under_the_owners_policy_context(fx: Fixtur
     fx.service.create_share(owner, "saved_question", question_id, "user", "east")
     result = fx.service.saved_question_result(east, question_id, 10)
     assert result["cached"] is False and result["rows"][0][0] == "EU-0"
+
+
+def test_a_failed_run_with_a_key_is_not_replayed_as_a_success(fx: Fixture) -> None:
+    owner = context("owner", "West")
+    job_id, _ = scheduled(fx, owner)
+
+    def boom(query: ValidatedQuery, *, max_rows: int) -> QueryResult:
+        raise RuntimeError("warehouse down")
+
+    fx.warehouse.execute_read_only = boom  # type: ignore[method-assign]
+    with pytest.raises(QueryFailed):
+        fx.service.run_now(owner, job_id, "key-f")
+    with pytest.raises(Invalid):
+        fx.service.run_now(owner, job_id, "key-f")
+
+
+def test_shares_of_a_disabled_owner_stop_being_visible() -> None:
+    fx = Fixture()
+    active = {"owner": True}
+    fx.service = CollabService(
+        fx.store, fx.jobs,
+        lambda _project: ProjectRuntime(1, MDL, list(POLICIES), fx.warehouse, 1000),
+        fx.audit, clock=lambda: fx.jobs.now, user_exists=lambda uid: active.get(uid, True),
+    )
+    owner = context("owner", "West")
+    dashboard_id, tile_id, _ = fx.dashboard_with_tile(owner)
+    fx.service.create_share(owner, "dashboard", dashboard_id, "role", "Viewer")
+    viewer = context("v", "EU", role="Viewer")
+    assert fx.service.get_dashboard(viewer, dashboard_id)["id"] == dashboard_id
+
+    active["owner"] = False
+
+    with pytest.raises(NotFound):
+        fx.service.get_dashboard(viewer, dashboard_id)
+    with pytest.raises(NotFound):
+        fx.service.tile_result(viewer, dashboard_id, tile_id, 10)
+    assert fx.service.shared_with_me(viewer) == []

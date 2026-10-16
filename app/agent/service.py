@@ -24,7 +24,7 @@ from app.ports.threads import ThreadStorePort, Turn
 from app.ports.vector_store import VectorStorePort
 from app.ports.warehouse import WarehousePort
 from app.semantic.compiler import CompileError
-from app.semantic.retrieval import RetrievalService
+from app.semantic.retrieval import RetrievalCache, RetrievalService
 from app.semantic.runner import compile_for, execute_compiled, failure_from
 
 
@@ -71,8 +71,11 @@ class AskService:
         threads: ThreadStorePort | None = None,
         summary_llm: LLMPort | None = None,
         knowledge: KnowledgeLookup | None = None,
+        retrieval_cache: RetrievalCache | None = None,
     ) -> None:
-        self._retrieval = RetrievalService(embedder, vector_store, knowledge=knowledge)
+        self._retrieval = RetrievalService(
+            embedder, vector_store, knowledge=knowledge, cache=retrieval_cache
+        )
         self._summary_llm = summary_llm
         self._llm = llm
         self._warehouse = warehouse

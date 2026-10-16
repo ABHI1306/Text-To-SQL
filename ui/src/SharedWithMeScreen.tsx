@@ -44,11 +44,9 @@ export function SharedWithMeScreen({ apiRequest }: { apiRequest: ApiRequest }) {
                 <span className="status-pill">{LABEL[item.resource_type]}</span>
                 <strong>{item.title ?? 'Untitled'}</strong>
                 <span className="muted">shared {new Date(item.granted_at).toLocaleDateString()}</span>
-                {item.resource_type !== 'thread' && (
-                  <button onClick={() => setOpen(open?.share_id === item.share_id ? null : item)} type="button">
-                    {open?.share_id === item.share_id ? 'Close' : 'Open'}
-                  </button>
-                )}
+                <button onClick={() => setOpen(open?.share_id === item.share_id ? null : item)} type="button">
+                  {open?.share_id === item.share_id ? 'Close' : 'Open'}
+                </button>
               </div>
               {open?.share_id === item.share_id && <SharedViewer apiRequest={apiRequest} item={item} />}
             </li>
@@ -63,7 +61,35 @@ function SharedViewer({ apiRequest, item }: { apiRequest: ApiRequest; item: Shar
   if (item.resource_type === 'saved_question') {
     return <ResultTable apiRequest={apiRequest} path={`/api/v1/saved-questions/${item.resource_id}/result`} />
   }
+  if (item.resource_type === 'thread') return <ThreadViewer apiRequest={apiRequest} id={item.resource_id} />
   return <DashboardViewer apiRequest={apiRequest} id={item.resource_id} />
+}
+
+type ThreadMessage = { id: string; question: string; logical_sql: string | null; failure: { message: string } | null }
+type Thread = { id: string; messages: ThreadMessage[] }
+
+/** A shared conversation: the questions and their logical SQL. The owner's answers and numbers
+ *  are not shown, because they were computed under the owner's data access, not yours. */
+function ThreadViewer({ apiRequest, id }: { apiRequest: ApiRequest; id: string }) {
+  const thread = useResource<Thread>(apiRequest, `/api/v1/threads/${id}`)
+  if (thread.error || thread.loading) return <ScreenState label="conversation" resource={thread} />
+  if (!thread.data) return null
+  return (
+    <div className="shared-tiles">
+      <p className="muted">
+        You see the questions and the SQL. The owner's answers and numbers stay private to them, because they were
+        computed with the owner's data access.
+      </p>
+      {thread.data.messages.length === 0 && <p className="admin-empty">This conversation has no questions yet.</p>}
+      {thread.data.messages.map((message) => (
+        <figure className="shared-tile" key={message.id}>
+          <figcaption><strong>{message.question}</strong></figcaption>
+          {message.logical_sql && <pre className="sql-block">{message.logical_sql}</pre>}
+          {message.failure && <p className="muted">Could not be answered: {message.failure.message}</p>}
+        </figure>
+      ))}
+    </div>
+  )
 }
 
 function DashboardViewer({ apiRequest, id }: { apiRequest: ApiRequest; id: string }) {

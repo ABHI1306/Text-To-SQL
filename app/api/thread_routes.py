@@ -30,6 +30,7 @@ from app.api.dependencies import (
     require_project_access,
 )
 from app.api.governance_routes import _load_principal
+from app.api.rate_limit import ASK_PER_MINUTE
 from app.audit.service import AuditService
 from app.auth.models import AuthContext, to_principal
 from app.config import get_settings
@@ -46,8 +47,8 @@ GovernanceDependency = Annotated[PostgresGovernanceRepository, Depends(get_gover
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
 ThreadsDependency = Annotated[PostgresThreadStore, Depends(get_thread_store)]
 KnowledgeDependency = Annotated[KnowledgeService, Depends(get_knowledge_service)]
-AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question"))]
-RerunSqlContext = Annotated[AuthContext, Depends(require_capability("rerun_sql"))]
+AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question", per_minute=ASK_PER_MINUTE))]
+RerunSqlContext = Annotated[AuthContext, Depends(require_capability("rerun_sql", per_minute=ASK_PER_MINUTE))]
 FeedbackContext = Annotated[AuthContext, Depends(require_capability("give_feedback"))]
 
 # Hard ceiling for a caller-supplied max_rows (the service also clamps to its configured limit).
@@ -153,6 +154,9 @@ def get_thread(
         shared=lambda: store.has_share("thread", record.id, context.user_id, context.role_name),
     ):
         raise HTTPException(status_code=404, detail="Thread not found")
+    # Summaries, answers and charts are written from the owner's rows. Anyone else reads the
+    # questions and logical SQL only; their own numbers come from running that SQL for them.
+    is_owner = record.user_id == context.user_id
     return {
         "id": record.id,
         "project_id": record.project_id,
@@ -165,12 +169,12 @@ def get_thread(
                 # Logical SQL uses business names and is safe for every reader; compiled SQL is
                 # never stored on a message.
                 "logical_sql": message.turn.logical_sql,
-                "answer": message.turn.answer,
-                "summary": message.turn.summary,
-                "chart": message.turn.chart,
-                "suggestions": list(message.turn.suggestions),
+                "answer": message.turn.answer if is_owner else None,
+                "summary": message.turn.summary if is_owner else None,
+                "chart": message.turn.chart if is_owner else None,
+                "suggestions": list(message.turn.suggestions) if is_owner else [],
                 "latency_ms": message.turn.latency_ms,
-                "trace": message.turn.trace,
+                "trace": message.turn.trace if is_owner else None,
                 "model_version": message.turn.model_version,
                 "failure": (
                     {"code": message.turn.failure_code, "message": message.turn.failure_message}

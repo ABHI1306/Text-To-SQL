@@ -55,6 +55,7 @@ def runtime_factory(
             statement_timeout_ms=settings.warehouse_statement_timeout_ms,
             max_rows=settings.warehouse_max_rows,
             ssl_ca_certificate=certificate,
+            pool_max_size=settings.warehouse_pool_max_size,
         )
         policies = [p.policy for p in governance.list_policies(project_id, enabled_only=True)]
         return ProjectRuntime(version, mdl, policies, warehouse, settings.warehouse_max_rows)

@@ -17,6 +17,7 @@ from app.adapters.metadata.oidc_state import PostgresOidcStateStore
 from app.adapters.metadata.postgres import PostgresMetadataRepository
 from app.adapters.metadata.threads import PostgresThreadStore
 from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
+from app.api.rate_limit import limiter
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
 from app.auth.oidc import OidcLoginService
@@ -168,13 +169,25 @@ def get_password_change_context(
     return _current_context(credentials, auth_service, allow_password_change=True)
 
 
-def require_capability(capability: str) -> Callable[..., AuthContext]:
+def require_capability(
+    capability: str, *, per_minute: int | None = None
+) -> Callable[..., AuthContext]:
+    """Require a capability; ``per_minute`` also caps how often one user may call the route."""
+
     def check(context: Annotated[AuthContext, Depends(get_current_context)]) -> AuthContext:
         if capability not in context.capabilities:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing capability: {capability}",
             )
+        if per_minute is not None:
+            wait = limiter.check(f"{capability}:{per_minute}:{context.user_id}", per_minute)
+            if wait is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many requests. Try again shortly.",
+                    headers={"Retry-After": str(int(wait) + 1)},
+                )
         return context
 
     check.required_capability = capability  # type: ignore[attr-defined]

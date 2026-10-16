@@ -203,7 +203,8 @@ def test_pending_logins_are_capped_so_login_cannot_exhaust_memory() -> None:
 
 def test_repeated_failures_from_one_address_are_rate_limited() -> None:
     w = World()
-    for _ in range(5):
+    # An address may fail 10x the per-account limit (people share one behind a proxy).
+    for _ in range(50):
         with pytest.raises(AuthenticationError):
             w.service.complete(code="c", state="s", browser_state="s", client_key="9.9.9.9")
     state, code, _ = w.sign_in("asha")
@@ -279,3 +280,14 @@ def test_routes_are_404_when_oidc_is_not_configured() -> None:
     c = client(None)
     assert c.get("/api/v1/auth/oidc/login").status_code == 404
     assert c.get("/api/v1/auth/oidc/callback", params={"code": "x", "state": "y"}).status_code == 404
+
+
+def test_a_different_provider_subject_cannot_take_over_an_existing_account() -> None:
+    w = World()
+    w.complete("asha")
+    assert w.repo.users["asha"]["subject"] == "sub-asha"
+
+    w.idp.users["asha"]["sub"] = "sub-someone-else"  # same username, a different person
+    with pytest.raises(AuthenticationError):
+        w.complete("asha")
+    assert w.repo.audits[-1][2]["reason"] == "account_conflict"

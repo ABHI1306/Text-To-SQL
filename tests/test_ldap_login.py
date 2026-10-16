@@ -67,6 +67,9 @@ class Repo:
     def clear_login_failures(self, user_id: str) -> None:
         pass
 
+    def session_is_alive(self, session_id: str, now: Any) -> bool:
+        return True
+
     def create_session(self, **kwargs: Any) -> None:
         self.sessions.append(kwargs["user_id"])
 
@@ -78,14 +81,19 @@ class Repo:
         return list(self.mappings)
 
     def provision_external_user(self, username: str, source: str, role_name: str,
-                                attributes: Mapping[str, JsonValue]) -> str:
+                                attributes: Mapping[str, JsonValue], *,
+                                subject: str | None = None) -> str:
         existing = self.users.get(username)
         if existing and existing["source"] != source:
             raise ValueError("another source")
+        if existing and subject is not None and existing.get("subject") not in (None, subject):
+            raise ValueError("different identity")
         if existing is None:
             self.users[username] = {"id": f"id-{username}", "role": role_name, "source": source,
                                     "hash": None, "attrs": {}, "status": "active"}
         user = self.users[username]
+        if subject is not None:
+            user["subject"] = subject
         user["role"] = role_name
         user["attrs"] = dict(attributes)
         return str(user["id"])

@@ -356,3 +356,80 @@ Written without running the test suite or migrations (see "Not verified").
   are Day 8.
 - **Not verified**: migration `0007_day7`, the PostgreSQL collaboration store and the UI were not
   run; `docs/openapi.yaml` and `ui/src/api/schema.d.ts` were not regenerated.
+
+## Day 8: collaboration screens, performance and accuracy tooling
+
+- **UI**: Dashboards screen (tile grid, each tile labelled "Computed for you", refresh, rename,
+  remove tile, delete), Scheduled questions screen (saved-question picker, preset or cron
+  schedule, time zone, run now, pause/resume, run history), one `ShareDialog` used for dashboards,
+  saved questions and conversations (replaces the free-text share form in chat), and a notices
+  panel behind the bell (failed scheduled runs, new drift reports, mark as read).
+- **Share pickers**: `GET /share-targets` (`share` capability) returns active accounts other than
+  the caller (id, username, role) and roles that hold `view_shared`. It is separate from `/users`
+  so owners do not need `manage_users`. It lists every active account, not only project members;
+  `create_share` still checks the grantee exists, and a grantee outside the project sees nothing.
+- **Compiled-output cache** (`app/semantic/runner.py`, `CompileCache`): key is a hash of the
+  logical SQL, the whole model, every enabled policy and the principal's id, role and attributes,
+  so compiled SQL (which embeds policy values) is never shared across policy contexts. Only
+  successes are cached; 256 entries, in process.
+- **Retrieval cache** (`RetrievalCache`, `RETRIEVAL_CACHE_SECONDS`, default 60, 0 turns it off):
+  keyed by project, model version, question and limits. Retrieval holds schema text and approved
+  knowledge only, so it is shared between users; the TTL bounds how stale a new pair can be.
+- **Connection pooling** (`app/adapters/warehouse/pool.py`, `WAREHOUSE_POOL_MAX_SIZE`, default 5):
+  one `psycopg_pool` pool per DSN, used when the package is installed and no custom CA is set;
+  otherwise connections are opened per query as before. `pyproject.toml` now asks for
+  `psycopg[binary,pool]`; run `uv lock` to refresh `uv.lock`.
+- **Rate limits** (`app/api/rate_limit.py`): per user, per minute, in process. Ask, stream and
+  SQL rerun 30; run-now 10; reading shared results 600. Over the limit returns 429 with
+  `Retry-After`. With more than one API process the limit is per process.
+- **Accuracy (Track A)**: `scripts/compare_eval.py` clusters a run's failures by stage and diffs
+  it against an earlier run, appending one line per lever to a log. No lever has been pulled and
+  no bake-off rerun yet: those need Ollama, Qdrant and a DBA-approved baseline, so no accuracy
+  number is claimed for Day 8.
+- **Not verified**: the new UI, `tests/test_day8_performance.py`, the pool and `pyproject.toml`
+  change were not run or installed; `docs/openapi.yaml`, `ui/src/api/schema.d.ts` and the UI mock
+  API were not regenerated or extended for `/share-targets`.
+
+### Day 8 security review (second reviewer, read-only pass)
+
+Fixed (tests in `tests/test_day8_security.py`, not yet run):
+- **`POST /users`** now requires the new account's role capabilities to be a subset of the
+  caller's, like role assignment.
+- **`compile-preview` with `sample`** needs a preview user and the saved model (no client `mdl`),
+  and the compiled SQL passes the validator before it runs.
+- **Shared threads**: a reader who is not the owner gets questions and logical SQL only; the
+  stored answer, summary, chart, suggestions and trace are withheld.
+- **`preview_as`** (and compile-preview's preview user): a non-DBA needs `manage_policies` and
+  the target's capabilities must be a subset of theirs. This narrows the Day 7 behaviour where
+  any `rerun_sql` holder could preview as any project member.
+- **User management**: role, attributes and project-access changes refuse self-edits and
+  accounts holding capabilities the caller lacks (DBA exempt).
+- **LIMIT**: a written LIMIT above 10,001 is clamped by the compiler.
+- **Allowed hosts**: IPv4-mapped IPv6 and names resolving to link-local or metadata addresses are
+  refused.
+- **`/query` with a foreign `thread_id`** is a 404 before any work runs.
+- `sqlglot` minimum raised to 30.0.0.
+
+Second batch (all remaining findings; tests added, `make check` green):
+- **Tokens and sessions**: an access token is accepted only while its refresh-token family has an
+  unrevoked, unexpired member (`session_is_alive`), so logout, "sign out other sessions" and
+  refresh-token reuse end it at once. Role, attribute and project-access changes now clear the
+  cached auth context (one account, or all accounts for a role change).
+- **Login limits**: an address may fail 10 times the per-account limit before it is refused, so
+  one shared proxy address no longer locks everyone out; the per-account limit is unchanged.
+  Starting a single sign-on attempt is limited to 20 a minute per address. Both limiters are
+  per process.
+- **Role names as identity**: renaming a role moves the shares and policy scopes that name it;
+  deleting one removes its shares and its `exemptRoles` entries. A policy's `roles` list is left
+  alone on delete, so it names nobody instead of widening.
+- **OIDC identity**: migration `0008_day8` adds `users.external_subject`. An OIDC account is
+  pinned to the provider's `sub` at first login; a different `sub` for the same username is
+  refused as an account conflict. Existing OIDC accounts are pinned at their next login.
+- **Run-now idempotency**: requests with one key are serialised in the process, and a key whose
+  stored run failed returns an error instead of replaying the failure as a result. Across several
+  API processes the database's unique key still stops a second record, not a second query.
+- **Disabled owners**: a disabled or locked owner's dashboards and saved questions are not
+  visible through shares.
+- **Demo data** (this install only, not code): E-commerce policies `orders_region` and
+  `customers_region` (`region = {{ user.region }}`, DBA exempt), account `asha` (role User,
+  region South), and DEMO dashboard, questions and shares.

@@ -17,10 +17,13 @@ class IdentityRepository(Protocol):
         source: str,
         role_name: str,
         attributes: Mapping[str, JsonValue],
+        *,
+        subject: str | None = None,
     ) -> str:
         """Create or refresh a directory account and return its id.
 
-        Raises ValueError when the name belongs to an account from another source.
+        Raises ValueError when the name belongs to an account from another source, or when the
+        account is already pinned to a different provider ``subject``.
         """
         ...
 

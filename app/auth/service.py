@@ -43,8 +43,13 @@ class PasswordPolicyError(ValueError):
 
 
 class LocalRateLimiter:
-    def __init__(self, *, max_failures: int, window_seconds: int) -> None:
+    def __init__(
+        self, *, max_failures: int, window_seconds: int, address_multiplier: int = 1
+    ) -> None:
         self._max_failures = max_failures
+        # Behind a proxy many people share one address, so an address may fail more often than
+        # one account before it is refused; the per-account limit is what stops guessing.
+        self._address_multiplier = address_multiplier
         self._window_seconds = window_seconds
         self._attempts: dict[str, deque[float]] = defaultdict(deque)
         self._lock = Lock()
@@ -56,7 +61,10 @@ class LocalRateLimiter:
                 attempts = self._attempts[key]
                 while attempts and attempts[0] <= current - self._window_seconds:
                     attempts.popleft()
-                if len(attempts) >= self._max_failures:
+                limit = self._max_failures * (
+                    self._address_multiplier if key.startswith("ip:") else 1
+                )
+                if len(attempts) >= limit:
                     return False
             return True
 
@@ -105,7 +113,10 @@ class AuthService:
         self._limiter = LocalRateLimiter(
             max_failures=max_failures,
             window_seconds=failure_window_seconds,
+            address_multiplier=10,
         )
+        # Starting a single sign-on attempt costs a stored row, so it is limited per address.
+        self._begin_limiter = LocalRateLimiter(max_failures=20, window_seconds=60)
         self._context_cache: dict[str, tuple[float, AuthContext]] = {}
         self._context_cache_lock = Lock()
 
@@ -192,6 +203,8 @@ class AuthService:
         return self._finish_external(
             identity.source, identity.username, identity.groups, identity.attributes,
             rate_keys, user, datetime.now(UTC),
+            # An OIDC "sub" never changes for a person; a directory DN can, so only OIDC pins it.
+            subject=identity.subject if identity.source == "oidc" else None,
         )
 
     def record_external_failure(self, source: str, reason: str, client_key: str) -> None:
@@ -227,6 +240,8 @@ class AuthService:
         rate_keys: tuple[str, ...],
         user: Any,
         now: datetime,
+        *,
+        subject: str | None = None,
     ) -> LoginResult:
         if self._identity is None:
             raise self._refuse(source, username, rate_keys, "identity_mappings_unavailable")
@@ -236,8 +251,9 @@ class AuthService:
                 source, username, rate_keys, "no_role_mapping", user.user_id if user else None
             )
         try:
+            extra = {"subject": subject} if subject is not None else {}
             user_id = self._identity.provision_external_user(
-                username, source, role_name, attributes
+                username, source, role_name, attributes, **extra
             )
         except ValueError as error:
             raise self._refuse(source, username, rate_keys, "account_conflict") from error
@@ -323,6 +339,10 @@ class AuthService:
             )
         except jwt.InvalidTokenError as error:
             raise TokenError("Access token is invalid or expired") from error
+        # A token dies with its session: logout, "sign out other sessions" and refresh-token
+        # reuse revoke the session family, and the token must stop working at once.
+        if not self._repository.session_is_alive(str(claims["jti"]), datetime.now(UTC)):
+            raise TokenError("Access token is invalid or expired")
         context = self._cached_auth_context(str(claims["sub"]))
         if context is None:
             raise TokenError("Access token is invalid or expired")
@@ -344,9 +364,22 @@ class AuthService:
                 self._context_cache[user_id] = (now + 30, context)
         return context
 
+    def external_begin_allowed(self, client_key: str) -> bool:
+        """Count one single sign-on start; False once an address starts too many per minute."""
+        keys = (f"begin:{client_key}",)
+        if not self._begin_limiter.allow(keys):
+            return False
+        self._begin_limiter.record_failure(keys)
+        return True
+
     def invalidate_auth_context(self, user_id: str) -> None:
         with self._context_cache_lock:
             self._context_cache.pop(user_id, None)
+
+    def invalidate_all_auth_contexts(self) -> None:
+        """After a change that can touch many accounts (a role's capabilities or projects)."""
+        with self._context_cache_lock:
+            self._context_cache.clear()
 
     def change_password(
         self,

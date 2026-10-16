@@ -223,6 +223,21 @@ class PostgresMetadataRepository:
             )
         return ("rotated", user_id, str(session["id"]))
 
+    def session_is_alive(self, session_id: str, now: datetime) -> bool:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM sessions live
+                    WHERE live.family_id = (SELECT family_id FROM sessions WHERE id = %s::uuid)
+                      AND live.revoked_at IS NULL AND live.expires_at > %s
+                ) AS alive
+                """,
+                (session_id, now),
+            )
+            row = cursor.fetchone()
+            return bool(row and row["alive"])
+
     def revoke_refresh_token(self, refresh_token_hash: str, now: datetime) -> None:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -691,6 +706,46 @@ class PostgresMetadataRepository:
             )
         return role_id
 
+    @staticmethod
+    def _rename_role_references(
+        cursor: psycopg.Cursor[Row], old_name: str, new_name: str | None
+    ) -> None:
+        """Move (``new_name``) or drop (None) every share and policy scope that names a role.
+
+        A role is identified by its name in shares and in a policy's ``roles`` and
+        ``exemptRoles``. Without this, a deleted role's grants and exemptions would pass to
+        whoever later creates a role with the same name. Dropping a name from ``roles`` is left
+        out on purpose: the policy then simply names nobody.
+        """
+        if new_name is None:
+            cursor.execute(
+                "DELETE FROM shares WHERE grantee_type = 'role' AND lower(grantee_id) = lower(%s)",
+                (old_name,),
+            )
+        else:
+            cursor.execute(
+                "UPDATE shares SET grantee_id = %s "
+                "WHERE grantee_type = 'role' AND lower(grantee_id) = lower(%s)",
+                (new_name, old_name),
+            )
+        keys = ("exemptRoles",) if new_name is None else ("roles", "exemptRoles")
+        for key in keys:
+            cursor.execute(
+                """
+                UPDATE row_policies SET applies_to = jsonb_set(
+                    applies_to, ARRAY[%(key)s::text],
+                    COALESCE((
+                        SELECT jsonb_agg(
+                            CASE WHEN lower(item) = lower(%(old)s) THEN %(new)s::text ELSE item END
+                        )
+                        FROM jsonb_array_elements_text(applies_to -> %(key)s::text) AS item
+                        WHERE %(new)s::text IS NOT NULL OR lower(item) <> lower(%(old)s)
+                    ), '[]'::jsonb))
+                WHERE jsonb_typeof(applies_to -> %(key)s::text) = 'array'
+                """,
+                {"key": key, "old": old_name, "new": new_name},
+            )
+
     def update_role(
         self,
         role_id: str,
@@ -701,12 +756,20 @@ class PostgresMetadataRepository:
     ) -> None:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
+                "SELECT name FROM roles WHERE id = %s::uuid AND is_system = FALSE FOR UPDATE",
+                (role_id,),
+            )
+            previous = cursor.fetchone()
+            if previous is None:
+                raise KeyError("Custom role does not exist")
+            cursor.execute(
                 "UPDATE roles SET name = %s, description = %s "
                 "WHERE id = %s::uuid AND is_system = FALSE",
                 (name, description, role_id),
             )
-            if cursor.rowcount == 0:
-                raise KeyError("Custom role does not exist")
+            if str(previous["name"]).casefold() != name.casefold():
+                # Shares and policy scopes name a role by its text, so they follow a rename.
+                self._rename_role_references(cursor, str(previous["name"]), name)
             cursor.execute("DELETE FROM role_capabilities WHERE role_id = %s::uuid", (role_id,))
             cursor.executemany(
                 "INSERT INTO role_capabilities (role_id, capability) "
@@ -733,7 +796,11 @@ class PostgresMetadataRepository:
                 raise KeyError("Custom role does not exist")
             if bool(row["in_use"]):
                 raise ValueError("Role is assigned to users or projects")
+            cursor.execute("SELECT name FROM roles WHERE id = %s::uuid", (role_id,))
+            named = cursor.fetchone()
             cursor.execute("DELETE FROM roles WHERE id = %s::uuid", (role_id,))
+            if named is not None:
+                self._rename_role_references(cursor, str(named["name"]), None)
 
     def list_users(self) -> list[dict[str, object]]:
         with self._connect() as connection, connection.cursor() as cursor:
@@ -898,8 +965,14 @@ class PostgresMetadataRepository:
         source: str,
         role_name: str,
         attributes: Mapping[str, JsonValue],
+        *,
+        subject: str | None = None,
     ) -> str:
-        """Create the account on first login; on later logins re-apply role and attributes."""
+        """Create the account on first login; on later logins re-apply role and attributes.
+
+        A ``subject`` (the provider's stable id) is stored on first login and must match after
+        that, so a different person who ends up with the same username cannot take the account.
+        """
         name = username.strip().casefold()
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM roles WHERE name = %s", (role_name,))
@@ -907,19 +980,27 @@ class PostgresMetadataRepository:
             if role is None:
                 raise ValueError(f"Role {role_name!r} does not exist")
             cursor.execute(
-                "SELECT id, auth_source FROM users WHERE lower(username) = %s FOR UPDATE", (name,)
+                "SELECT id, auth_source, external_subject FROM users "
+                "WHERE lower(username) = %s FOR UPDATE",
+                (name,),
             )
             existing = cursor.fetchone()
             if existing is not None and existing["auth_source"] != source:
                 raise ValueError("That username belongs to an account from another source")
+            if (
+                existing is not None
+                and subject is not None
+                and existing["external_subject"] not in (None, subject)
+            ):
+                raise ValueError("That account belongs to a different identity at the provider")
             if existing is None:
                 cursor.execute(
                     """
                     INSERT INTO users (id, username, password_hash, role_id, auth_source,
-                                       must_change_password)
-                    VALUES (gen_random_uuid(), %s, NULL, %s, %s, FALSE) RETURNING id
+                                       must_change_password, external_subject)
+                    VALUES (gen_random_uuid(), %s, NULL, %s, %s, FALSE, %s) RETURNING id
                     """,
-                    (name, role["id"], source),
+                    (name, role["id"], source, subject),
                 )
                 user_id = str(cursor.fetchone()["id"])  # type: ignore[index]
                 action = "external_user_created"
@@ -929,6 +1010,11 @@ class PostgresMetadataRepository:
                     "UPDATE users SET role_id = %s WHERE id = %s::uuid AND role_id <> %s",
                     (role["id"], user_id, role["id"]),
                 )
+                if subject is not None and existing["external_subject"] is None:
+                    cursor.execute(
+                        "UPDATE users SET external_subject = %s WHERE id = %s::uuid",
+                        (subject, user_id),
+                    )
                 action = "external_user_refreshed"
             cursor.execute(
                 "DELETE FROM user_attributes WHERE user_id = %s::uuid AND source = %s",

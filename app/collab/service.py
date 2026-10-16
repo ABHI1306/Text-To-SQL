@@ -12,9 +12,11 @@ Two rules carry the safety of this module:
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 
 from app.agent.state import StructuredFailure
@@ -32,6 +34,14 @@ from app.semantic.runner import compile_for, execute_compiled, failure_from
 PRESETS = {"hourly": "0 * * * *", "daily": "0 6 * * *", "weekly": "0 6 * * 1"}
 DEFAULT_CACHE_SECONDS = 300
 MAX_TILES = 24
+
+
+# Striped locks: one per bucket of idempotency keys, so nothing needs cleaning up afterwards.
+_KEY_LOCKS = tuple(Lock() for _ in range(64))
+
+
+def _key_lock(key: str) -> Lock:
+    return _KEY_LOCKS[zlib.crc32(key.encode()) % len(_KEY_LOCKS)]
 
 
 class NotFound(LookupError):
@@ -102,8 +112,13 @@ class CollabService:
             return False
         if record["owner_id"] == context.user_id:
             return True
-        return "view_shared" in context.capabilities and self._store.has_share(
-            resource_type, str(record["id"]), context.user_id, context.role_name
+        # What a disabled or locked account owns stops being visible to everyone it was shared with.
+        return (
+            "view_shared" in context.capabilities
+            and self._user_exists(str(record["owner_id"]))
+            and self._store.has_share(
+                resource_type, str(record["id"]), context.user_id, context.role_name
+            )
         )
 
     def _own_saved_question(self, context: AuthContext, question_id: str) -> Record:
@@ -462,10 +477,23 @@ class CollabService:
     ) -> Record:
         """Run immediately as the owner (the caller); the same key never runs twice."""
         job = self._own_job(context, job_id)
-        if idempotency_key:
+        if not idempotency_key:
+            return self._run_manual(job, context, None)
+        # Two requests with one key at the same moment must not both run the query: the second
+        # waits, then finds the first one's stored run.
+        with _key_lock(f"{job.id}:{idempotency_key}"):
             existing = self._store.find_run_by_key(job.id, idempotency_key)
             if existing is not None:
+                if existing.get("status") == "failed":
+                    raise Invalid(
+                        "The earlier run with this Idempotency-Key failed; use a new key to retry"
+                    )
                 return existing
+            return self._run_manual(job, context, idempotency_key)
+
+    def _run_manual(
+        self, job: ScheduledJob, context: AuthContext, idempotency_key: str | None
+    ) -> Record:
         slot = self._clock()
         self.execute_scheduled(job, slot, context, trigger="manual", idempotency_key=idempotency_key)
         runs = self._store.list_runs(job.id)

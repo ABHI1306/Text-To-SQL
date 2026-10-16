@@ -7,6 +7,7 @@ from psycopg.conninfo import make_conninfo
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
+from app.adapters.warehouse.pool import get_pool
 from app.core.types import QueryResult, ValidatedQuery
 
 
@@ -22,6 +23,7 @@ class PostgresWarehouseAdapter:
         statement_timeout_ms: int = 10_000,
         max_rows: int = 1_000,
         ssl_ca_certificate: str | None = None,
+        pool_max_size: int = 0,
     ) -> None:
         if not dsn:
             raise ValueError("A warehouse DSN is required")
@@ -33,10 +35,18 @@ class PostgresWarehouseAdapter:
         self._statement_timeout_ms = statement_timeout_ms
         self._max_rows = max_rows
         self._ssl_ca_certificate = ssl_ca_certificate
+        self._pool_max_size = pool_max_size
 
     @contextmanager
     def _connect(self) -> Generator[psycopg.Connection[tuple[object, ...]], None, None]:
         if self._ssl_ca_certificate is None:
+            pool = get_pool(self._dsn, self._pool_max_size)
+            if pool is not None:
+                # Each use is one transaction (set_config(..., true) is transaction-local), so
+                # nothing a query sets can leak to the next borrower.
+                with pool.connection() as connection:
+                    yield connection
+                return
             with psycopg.connect(self._dsn) as connection:
                 yield connection
             return

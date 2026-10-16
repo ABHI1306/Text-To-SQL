@@ -287,6 +287,28 @@ def _require_delegable_capabilities(context: AuthContext, capabilities: list[str
         )
 
 
+def _require_manageable_user(
+    context: AuthContext, repository: PostgresMetadataRepository, user_id: UUID
+) -> None:
+    """A manager may not change their own access, nor act on an account stronger than theirs.
+
+    Roles, attributes and project access decide which rows an account sees, so editing one's own
+    is the same as editing one's own row policy. A DBA may still manage every account.
+    """
+    if context.role_name == "DBA":
+        return
+    if str(user_id) == context.user_id:
+        raise HTTPException(status_code=403, detail="Cannot change your own access")
+    target = repository.get_auth_context(str(user_id))
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not set(repository.get_role_capabilities(target.role_name) or ()) <= context.capabilities:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot manage an account holding capabilities the current user does not hold",
+        )
+
+
 def _require_delegable_projects(context: AuthContext, project_ids: list[UUID]) -> None:
     if (
         context.role_name != "DBA"
@@ -720,6 +742,7 @@ def update_role(
     context: ManageRolesContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
     _require_delegable_capabilities(context, body.capabilities)
     try:
@@ -733,6 +756,7 @@ def update_role(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except psycopg.errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Role name already exists") from error
+    auth_service.invalidate_all_auth_contexts()
     audit.record(
         context.user_id,
         "role_updated",
@@ -749,6 +773,7 @@ def delete_role(
     context: ManageRolesContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> Response:
     try:
         repository.delete_role(str(role_id))
@@ -756,6 +781,7 @@ def delete_role(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    auth_service.invalidate_all_auth_contexts()
     audit.record(context.user_id, "role_deleted", "role", str(role_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -774,6 +800,10 @@ def create_user(
     context: ManageUsersContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    role_capabilities = repository.get_role_capabilities(body.role)
+    if role_capabilities is None:
+        raise HTTPException(status_code=404, detail="Role does not exist")
+    _require_delegable_capabilities(context, list(role_capabilities))
     try:
         user_id = repository.create_local_user(
             body.username,
@@ -795,7 +825,9 @@ def assign_user_role(
     context: ManageUsersContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    _require_manageable_user(context, repository, user_id)
     capabilities = repository.get_role_capabilities(body.role)
     if capabilities is None:
         raise HTTPException(status_code=404, detail="Role does not exist")
@@ -804,6 +836,7 @@ def assign_user_role(
         repository.set_user_role(str(user_id), body.role)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    auth_service.invalidate_auth_context(str(user_id))
     audit.record(context.user_id, "user_role_changed", "user", str(user_id), {"role": body.role})
     return {"user_id": str(user_id), "role": body.role}
 
@@ -826,7 +859,9 @@ def set_user_project_access(
     context: ManageUsersContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    _require_manageable_user(context, repository, user_id)
     _require_delegable_projects(context, body.project_ids)
     try:
         repository.replace_user_project_access(
@@ -836,6 +871,7 @@ def set_user_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    auth_service.invalidate_auth_context(str(user_id))
     audit.record(
         context.user_id,
         "user_project_access_changed",
@@ -864,6 +900,7 @@ def set_role_project_access(
     context: ManageRolesContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
     _require_delegable_projects(context, body.project_ids)
     try:
@@ -874,6 +911,7 @@ def set_role_project_access(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    auth_service.invalidate_all_auth_contexts()
     audit.record(
         context.user_id,
         "role_project_access_changed",
@@ -902,11 +940,14 @@ def set_user_attributes(
     context: ManageUsersContext,
     repository: RepositoryDependency,
     audit: AuditDependency,
+    auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    _require_manageable_user(context, repository, user_id)
     try:
         repository.replace_user_attributes(str(user_id), body.attributes)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    auth_service.invalidate_auth_context(str(user_id))
     audit.record(
         context.user_id,
         "user_attributes_changed",

@@ -21,9 +21,11 @@ from app.api.dependencies import (
     get_audit_service,
     get_governance_repository,
     get_repository,
+    get_thread_store,
     require_capability,
     require_project_access,
 )
+from app.api.rate_limit import ASK_PER_MINUTE
 from app.audit.service import AuditService
 from app.auth.models import AuthContext
 from app.config import get_settings
@@ -34,8 +36,9 @@ router = APIRouter(prefix="/api/v1", tags=["Query"])
 
 RepositoryDependency = Annotated[PostgresMetadataRepository, Depends(get_repository)]
 GovernanceDependency = Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)]
+ThreadsDependency = Annotated[PostgresThreadStore, Depends(get_thread_store)]
 AuditDependency = Annotated[AuditService, Depends(get_audit_service)]
-AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question"))]
+AskQuestionContext = Annotated[AuthContext, Depends(require_capability("ask_question", per_minute=ASK_PER_MINUTE))]
 
 # Failure codes that are the system's fault rather than the question's.
 _UNAVAILABLE = {"LLM_UNAVAILABLE"}
@@ -95,6 +98,17 @@ def _sse(event: AskEvent) -> str:
     return f"event: {event.type}\ndata: {json.dumps(event.data, default=str)}\n\n"
 
 
+def _check_thread(
+    threads: PostgresThreadStore, context: AuthContext, project_id: UUID, thread_id: UUID | None
+) -> None:
+    """Before any work runs: a thread id must be the caller's own, in this project."""
+    if thread_id is None:
+        return
+    record = threads.get(str(thread_id))
+    if record is None or record.user_id != context.user_id or record.project_id != str(project_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+
 @router.post("/projects/{project_id}/query")
 def ask_project_question(
     project_id: UUID,
@@ -103,8 +117,10 @@ def ask_project_question(
     repository: RepositoryDependency,
     governance: GovernanceDependency,
     audit: AuditDependency,
+    threads: ThreadsDependency,
 ) -> dict[str, Any]:
     require_project_access(context, project_id)
+    _check_thread(threads, context, project_id, body.thread_id)
     prepared = _prepare(project_id, repository, audit)
     try:
         policies = [p.policy for p in governance.list_policies(str(project_id), enabled_only=True)]
@@ -160,9 +176,11 @@ def ask_project_question_stream(
     repository: RepositoryDependency,
     governance: GovernanceDependency,
     audit: AuditDependency,
+    threads: ThreadsDependency,
 ) -> StreamingResponse:
     """Server-sent events: retrieval, sql_candidate, compilation, validation, rows, done/error."""
     require_project_access(context, project_id)
+    _check_thread(threads, context, project_id, body.thread_id)
     prepared = _prepare(project_id, repository, audit)
     policies = [p.policy for p in governance.list_policies(str(project_id), enabled_only=True)]
     principal = _principal(context)
