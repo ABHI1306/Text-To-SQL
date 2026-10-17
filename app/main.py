@@ -8,6 +8,8 @@ from app.api.eval_routes import router as eval_router
 from app.api.governance_routes import router as governance_router
 from app.api.knowledge_routes import router as knowledge_router
 from app.api.oidc_routes import router as oidc_router
+from app.api.ops_routes import health_router
+from app.api.ops_routes import router as ops_router
 from app.api.routes import router as api_router
 from app.api.thread_routes import router as thread_router
 from app.config import get_settings, validate_runtime_secrets
@@ -36,6 +38,7 @@ TAGS = [
         "Drift & Profiling",
         "Users & Roles",
         "Admin",
+        "Operations",
     )
 ]
 
@@ -50,6 +53,8 @@ app.include_router(knowledge_router)
 app.include_router(oidc_router)
 app.include_router(drift_router)
 app.include_router(admin_router)
+app.include_router(ops_router)
+app.include_router(health_router)
 
 
 @app.get("/health", tags=["Health"])

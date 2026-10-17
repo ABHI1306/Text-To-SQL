@@ -264,6 +264,38 @@ class PostgresJobStore:
             )
             return cursor.rowcount == 1
 
+    def health(self, now: datetime, *, grace_seconds: int) -> Mapping[str, object]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  count(*) FILTER (WHERE status = 'active') AS active,
+                  count(*) FILTER (WHERE status = 'paused') AS paused,
+                  count(*) FILTER (WHERE status = 'active'
+                                   AND next_run_at < %s - make_interval(secs => %s)) AS overdue,
+                  count(*) FILTER (WHERE last_status = 'failed') AS last_failed,
+                  min(next_run_at) FILTER (WHERE status = 'active') AS next_slot,
+                  max(last_run_at) AS last_run_at
+                FROM scheduled_jobs
+                """,
+                (now, grace_seconds),
+            )
+            jobs = cursor.fetchone() or {}
+            cursor.execute(
+                """
+                SELECT count(*) FILTER (WHERE status = 'running' AND leased_until >= %s) AS running,
+                       count(*) FILTER (WHERE status = 'running' AND leased_until < %s) AS stale,
+                       count(*) FILTER (WHERE status = 'failed'
+                                        AND started_at > %s - interval '24 hours') AS failed_24h,
+                       count(*) FILTER (WHERE status = 'succeeded'
+                                        AND started_at > %s - interval '24 hours') AS succeeded_24h
+                FROM job_leases
+                """,
+                (now, now, now, now),
+            )
+            leases = cursor.fetchone() or {}
+        return {**jobs, **leases}
+
 
 def _job(row: Row) -> ScheduledJob:
     return ScheduledJob(

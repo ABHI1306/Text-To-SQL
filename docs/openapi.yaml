@@ -746,165 +746,6 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
-  /projects/{project_id}/knowledge/instructions:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      operationId: listInstructions
-      description: Needs `manage_knowledge`.
-      responses:
-        "200":
-          description: Instructions of the project.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/KnowledgeInstruction"
-    post:
-      operationId: createInstruction
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/KnowledgeInstructionRequest"
-      responses:
-        "201":
-          description: Instruction created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/KnowledgeInstruction"
-  /projects/{project_id}/knowledge/instructions/{instruction_id}:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - name: instruction_id
-        in: path
-        required: true
-        schema:
-          type: string
-    patch:
-      operationId: updateInstruction
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/KnowledgeInstructionRequest"
-      responses:
-        "200":
-          description: Instruction updated.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/KnowledgeInstruction"
-        "404":
-          $ref: "#/components/responses/Error"
-    delete:
-      operationId: deleteInstruction
-      responses:
-        "204":
-          description: Instruction deleted.
-        "404":
-          $ref: "#/components/responses/Error"
-  /projects/{project_id}/knowledge/sql-pairs:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      operationId: listSqlPairs
-      responses:
-        "200":
-          description: Approved question and SQL pairs.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/SqlPair"
-    post:
-      operationId: createSqlPair
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SqlPairRequest"
-      responses:
-        "201":
-          description: Pair created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SqlPair"
-  /projects/{project_id}/knowledge/sql-pairs/{pair_id}:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - name: pair_id
-        in: path
-        required: true
-        schema:
-          type: string
-    delete:
-      operationId: deleteSqlPair
-      responses:
-        "204":
-          description: Pair deleted.
-        "404":
-          $ref: "#/components/responses/Error"
-  /projects/{project_id}/knowledge/proposals:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-    get:
-      operationId: listPairProposals
-      responses:
-        "200":
-          description: Pending proposals, each with the nearest approved pair.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/PairProposalItem"
-  /projects/{project_id}/knowledge/proposals/{proposal_id}/approve:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - name: proposal_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      operationId: approveProposal
-      responses:
-        "200":
-          description: Proposal approved and promoted to an SQL pair.
-        "404":
-          $ref: "#/components/responses/Error"
-  /projects/{project_id}/knowledge/proposals/{proposal_id}/reject:
-    parameters:
-      - $ref: "#/components/parameters/ProjectId"
-      - name: proposal_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      operationId: rejectProposal
-      responses:
-        "200":
-          description: Proposal rejected.
-        "404":
-          $ref: "#/components/responses/Error"
   /sample-projects:
     get:
       operationId: listSampleProjectTemplates
@@ -1064,6 +905,72 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuditPage"
         "422":
+          $ref: "#/components/responses/Error"
+  /ops/usage:
+    get:
+      operationId: getModelUsage
+      description: >-
+        Requires `view_audit`. Tokens and model busy time per question since the API process
+        started; counters reset on restart. `gpu_ms` is the model server's call duration.
+      responses:
+        "200":
+          description: Totals and the most recent questions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questions, llm_calls, llm_errors, prompt_tokens, completion_tokens, gpu_ms, avg_tokens_per_question, avg_gpu_ms_per_question, recent]
+                properties:
+                  questions: { type: integer }
+                  llm_calls: { type: integer }
+                  llm_errors: { type: integer }
+                  prompt_tokens: { type: integer }
+                  completion_tokens: { type: integer }
+                  gpu_ms: { type: integer }
+                  avg_tokens_per_question: { type: integer }
+                  avg_gpu_ms_per_question: { type: integer }
+                  recent:
+                    type: array
+                    items:
+                      type: object
+                      required: [tokens, gpu_ms, llm_calls, latency_ms]
+                      properties:
+                        tokens: { type: integer }
+                        gpu_ms: { type: integer }
+                        llm_calls: { type: integer }
+                        latency_ms: { type: integer }
+        "403":
+          $ref: "#/components/responses/Error"
+  /ops/scheduler:
+    get:
+      operationId: getSchedulerHealth
+      description: >-
+        Requires `view_audit`. `degraded` means a job is overdue or a running lease has expired,
+        which usually means the worker is not running.
+      responses:
+        "200":
+          description: Job and lease counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, checked_at, active, paused, overdue, stale]
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  checked_at: { type: string, format: date-time }
+                  active: { type: integer }
+                  paused: { type: integer }
+                  overdue: { type: integer }
+                  last_failed: { type: integer }
+                  running: { type: integer }
+                  stale: { type: integer }
+                  failed_24h: { type: integer }
+                  succeeded_24h: { type: integer }
+                  next_slot: { type: [string, "null"], format: date-time }
+                  last_run_at: { type: [string, "null"], format: date-time }
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
           $ref: "#/components/responses/Error"
   /projects/{project_id}/knowledge/instructions:
     parameters:
@@ -1662,73 +1569,6 @@ components:
         testUserId:
           type: string
           format: uuid
-    KnowledgeInstructionRequest:
-      type: object
-      required: [text]
-      properties:
-        text:
-          type: string
-          minLength: 1
-          maxLength: 2000
-    KnowledgeInstruction:
-      type: object
-      required: [id, text]
-      properties:
-        id:
-          type: string
-        text:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    SqlPairRequest:
-      type: object
-      required: [question, sql]
-      properties:
-        question:
-          type: string
-        sql:
-          type: string
-    SqlPair:
-      type: object
-      required: [id, question, sql]
-      properties:
-        id:
-          type: string
-        question:
-          type: string
-        sql:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    PairProposal:
-      type: object
-      required: [id, question, sql]
-      properties:
-        id:
-          type: string
-        question:
-          type: string
-        sql:
-          type: string
-        status:
-          type: string
-        proposed_by:
-          type: [string, "null"]
-        created_at:
-          type: string
-          format: date-time
-    PairProposalItem:
-      description: The proposal fields, or `{proposal, nearest_approved}`; the UI accepts both shapes.
-      allOf:
-        - $ref: "#/components/schemas/PairProposal"
-        - type: object
-          properties:
-            nearest_approved:
-              oneOf:
-                - $ref: "#/components/schemas/SqlPair"
-                - type: "null"
     AuditPage:
       type: object
       required: [items, nextCursor]

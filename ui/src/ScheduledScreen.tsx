@@ -175,7 +175,9 @@ function JobCard({
           Run now
         </button>
         <button
-          onClick={() => void act(() => callApi(apiRequest, `/api/v1/scheduled-questions/${job.id}/${paused ? 'resume' : 'pause'}`, 'POST'))}
+          onClick={() => void act(async () => {
+            await callApi(apiRequest, `/api/v1/scheduled-questions/${job.id}/${paused ? 'resume' : 'pause'}`, 'POST')
+          })}
           type="button"
         >
           {paused ? 'Resume' : 'Pause'}

@@ -17,6 +17,7 @@ from app.core.jsonable import json_value as _json_value
 from app.core.types import JsonValue, Principal
 from app.domain.mdl import Mdl
 from app.domain.policy import RowPolicy
+from app.observability.usage import METRICS, Usage, bind_usage
 from app.ports.embedder import EmbedderPort
 from app.ports.knowledge import KnowledgeLookup
 from app.ports.llm import LLMPort
@@ -128,16 +129,24 @@ class AskService:
         history = [(t.standalone_question, t.logical_sql) for t in turns]
         state: dict[str, Any] = {"history": history}
         seen: list[AskEvent] = []
-        for update in graph.stream(
-            {
-                "project_id": project_id,
-                "thread_id": thread_id,
-                "question": question.strip(),
-                "history": history,
-                "principal": principal,
-            },
-            stream_mode="updates",
-        ):
+        usage = Usage()
+        updates = iter(
+            graph.stream(
+                {
+                    "project_id": project_id,
+                    "thread_id": thread_id,
+                    "question": question.strip(),
+                    "history": history,
+                    "principal": principal,
+                },
+                stream_mode="updates",
+            )
+        )
+        while True:
+            with bind_usage(usage):
+                update = next(updates, None)
+            if update is None:
+                break
             for node, change in update.items():
                 state.update(change or {})
                 now = time.monotonic()
@@ -163,9 +172,11 @@ class AskService:
         suggestions: list[str] = []
         if contract and failure is None and state.get("intent") == "data_question" \
                 and state.get("rows") is not None:
-            suggestions = self._suggest(state)
+            with bind_usage(usage):
+                suggestions = self._suggest(state)
             if suggestions:
                 yield AskEvent("suggestions", {"items": suggestions})
+        METRICS.add_question(usage, elapsed)
         message_id = None
         if remember:
             message_id = self._remember(
@@ -185,8 +196,8 @@ class AskService:
                     "message_id": message_id or str(uuid.uuid4()),
                     "model_version": version,
                     "latency_ms": elapsed,
-                    "tokens": 0,  # the Ollama adapter does not report token counts yet
-                    "gpu_ms": None,
+                    "tokens": usage.tokens,
+                    "gpu_ms": usage.gpu_ms if usage.calls else None,
                     "policy_context": state.get("policy_context"),
                     "attempts": state.get("attempts", 0),
                     "prompt_version": PROMPT_VERSION,

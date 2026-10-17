@@ -2,6 +2,8 @@ from collections.abc import Mapping
 
 import httpx
 
+from app.observability.usage import counts_from_ollama, record_call, record_error
+
 
 class OllamaLLMAdapter:
     def __init__(
@@ -41,7 +43,10 @@ class OllamaLLMAdapter:
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPError as error:
+            record_error()
             raise RuntimeError("Local Ollama model is unavailable") from error
+        if isinstance(payload, dict):
+            record_call(*counts_from_ollama(payload))
         generated_text = payload.get("response") if isinstance(payload, dict) else None
         if not isinstance(generated_text, str):
             raise TypeError("Local Ollama returned an invalid response")

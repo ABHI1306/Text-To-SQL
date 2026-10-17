@@ -4258,3 +4258,27 @@ button.trace-heading {
 .notice-panel { position: absolute; right: 1rem; top: 3.5rem; z-index: 20; width: min(420px, 92vw); max-height: 70vh; overflow: auto; padding: 1rem; border: 1px solid var(--border, currentColor); border-radius: 8px; background: var(--surface, Canvas); }
 .notice { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0; }
 .notice.read { opacity: 0.6; }
+
+.admin-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+
+.admin-facts > div {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.admin-facts dt {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.admin-facts dd {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}

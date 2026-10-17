@@ -20,6 +20,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/oidc/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Starts OpenID Connect sign-in (authorization code flow with PKCE, state and nonce) and redirects to the identity provider. Sets a short-lived HttpOnly SameSite=Lax `oidc_state` cookie that the callback must match. 404 when OIDC is not configured. */
+        get: operations["oidcLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Completes OIDC sign-in. The state is single-use and expires after ten minutes; the ID token is validated (signature via JWKS, iss, aud, exp, nonce) and the person's groups are mapped to a role through the `oidc` identity mappings, re-evaluated on every login. The session issued is the same as `/auth/login`. */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/refresh": {
         parameters: {
             query?: never;
@@ -254,7 +288,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Same pipeline as `/query`, as server-sent events in this order (steps repeat on correction): retrieval, sql_candidate, compilation, validation, correction, rows, then done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts holding `rerun_sql`. `rewrite` (follow-ups only), `clarification` and `answer` replace the SQL steps when the message needs a question back or no query; `suggestions` is defined for the conversation work and is not emitted yet. */
+        /** @description Same pipeline as `/query`, as server-sent events in this order (steps repeat on correction): retrieval, sql_candidate, compilation, validation, correction, rows, then done or error. Every step event carries `ms`. `compilation.sql` is sent only to accounts holding `rerun_sql`. `rewrite` (follow-ups only), `clarification` and `answer` replace the SQL steps when the message needs a question back or no query; `suggestions` is defined for the conversation work and is not emitted yet. `retrieval` lists the approved SQL pairs (`{id, question}`) and active instructions (`{id, text}`) given to the model. After `rows`, `summary` (`{text}`, only numbers that are in the rows) and `chart` (`{spec}`, a Vega-Lite spec validated against the result columns, bound to the dataset named `rows`) are sent when the small model produced valid ones; they are optional and never replace or delay the rows. */
         post: operations["askQuestionStream"];
         delete?: never;
         options?: never;
@@ -456,137 +490,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects/{project_id}/knowledge/instructions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        /** @description Needs `manage_knowledge`. */
-        get: operations["listInstructions"];
-        put?: never;
-        post: operations["createInstruction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/instructions/{instruction_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                instruction_id: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["deleteInstruction"];
-        options?: never;
-        head?: never;
-        patch: operations["updateInstruction"];
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/sql-pairs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        get: operations["listSqlPairs"];
-        put?: never;
-        post: operations["createSqlPair"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/sql-pairs/{pair_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                pair_id: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["deleteSqlPair"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/proposals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        get: operations["listPairProposals"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/proposals/{proposal_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["approveProposal"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/projects/{project_id}/knowledge/proposals/{proposal_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["rejectProposal"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/sample-projects": {
         parameters: {
             query?: never;
@@ -714,6 +617,199 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ops/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Requires `view_audit`. Tokens and model busy time per question since the API process started; counters reset on restart. `gpu_ms` is the model server's call duration. */
+        get: operations["getModelUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/scheduler": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Requires `view_audit`. `degraded` means a job is overdue or a running lease has expired, which usually means the worker is not running. */
+        get: operations["getSchedulerHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/instructions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Requires `manage_knowledge`. Instructions of this project only. */
+        get: operations["listInstructions"];
+        put?: never;
+        /** @description Requires `manage_knowledge`. Active instructions are embedded and added, as delimited data, to the generation and correction prompts. Writes an `instruction_created` audit event. */
+        post: operations["createInstruction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/instructions/{instruction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Requires `manage_knowledge`. Audited as `instruction_deleted`. */
+        delete: operations["deleteInstruction"];
+        options?: never;
+        head?: never;
+        /** @description Requires `manage_knowledge`. Audited as `instruction_updated`. */
+        patch: operations["updateInstruction"];
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/sql-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Requires `manage_knowledge`. Approved pairs only; proposals are under `/knowledge/proposals`. */
+        get: operations["listSqlPairs"];
+        put?: never;
+        /** @description Requires `approve_pairs`, because a pair added by hand is approved immediately. The SQL must compile against the deployed semantic model (logical names only), otherwise 422 `INVALID_SQL`. A duplicate is 409. Audited as `sql_pair_created`. */
+        post: operations["createSqlPair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/sql-pairs/{pair_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Requires `manage_knowledge`. Audited as `sql_pair_deleted`. */
+        delete: operations["deleteSqlPair"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Requires `give_feedback`. A thumbs-up proposes the question and its logical SQL as a pair (status `proposed`, not used by retrieval until approved); a thumbs-down is only recorded. The SQL must compile against the deployed model. Audited as `feedback_given` and, for a new proposal, `sql_pair_proposed`. */
+        post: operations["giveFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Requires `approve_pairs`. Each proposal carries `nearest_approved`, the closest approved pair (or null). */
+        get: operations["listProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals/{pair_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Requires `approve_pairs`. The SQL is re-checked against the current model. Audited as `sql_pair_approved`. */
+        post: operations["approveProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/knowledge/proposals/{pair_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Requires `approve_pairs`. Audited as `sql_pair_rejected` (with the reason). */
+        post: operations["rejectProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/threads": {
         parameters: {
             query?: never;
@@ -750,10 +846,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/profiling-schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's scheduled profiling and drift-detection job. Needs `manage_profiling`. */
+        get: operations["getProfilingSchedule"];
+        /** @description Creates or replaces the schedule. The job runs as the caller; if that account is later disabled or loses access the job pauses instead of running. Needs `manage_profiling`. */
+        put: operations["setProfilingSchedule"];
+        post?: never;
+        delete: operations["deleteProfilingSchedule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/drift-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Reports comparing the live catalog with the deployed MDL, newest first (including runs that found no drift). Needs `manage_profiling`. */
+        get: operations["listDriftReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/drift-reports/{report_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Applies the report's findings to the MDL revision it compared and saves the result as a new draft revision (one per report). 409 when the report found no drift, already has a draft, or the drift cannot be applied without breaking calculated columns, metrics or relationships. Needs `edit_mdl`. */
+        post: operations["createDraftFromDrift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        Instruction: {
+            /** Format: uuid */
+            id?: string;
+            text?: string;
+            active?: boolean;
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        SqlPair: {
+            /** Format: uuid */
+            id?: string;
+            question?: string;
+            logical_sql?: string;
+            /** @enum {string} */
+            status?: "proposed" | "approved" | "rejected";
+            /** @enum {string} */
+            source?: "manual" | "feedback";
+            /** Format: uuid */
+            proposed_by?: string | null;
+            /** Format: uuid */
+            decided_by?: string | null;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            decided_at?: string | null;
+        };
         CompileError: {
             /** @enum {string} */
             code: "NON_SELECT" | "SYNTAX_ERROR" | "UNKNOWN_MODEL" | "UNKNOWN_COLUMN" | "DISALLOWED_FUNCTION" | "JOIN_NOT_ALLOWED" | "INVALID_MODEL" | "POLICY_ERROR";
@@ -794,39 +977,6 @@ export interface components {
             enabled: boolean;
             /** Format: uuid */
             testUserId: string;
-        };
-        KnowledgeInstructionRequest: {
-            text: string;
-        };
-        KnowledgeInstruction: {
-            id: string;
-            text: string;
-            /** Format: date-time */
-            created_at?: string;
-        };
-        SqlPairRequest: {
-            question: string;
-            sql: string;
-        };
-        SqlPair: {
-            id: string;
-            question: string;
-            sql: string;
-            /** Format: date-time */
-            created_at?: string;
-        };
-        PairProposal: {
-            id: string;
-            question: string;
-            sql: string;
-            status?: string;
-            proposed_by?: string | null;
-            /** Format: date-time */
-            created_at?: string;
-        };
-        /** @description The proposal fields, or `{proposal, nearest_approved}`; the UI accepts both shapes. */
-        PairProposalItem: components["schemas"]["PairProposal"] & {
-            nearest_approved?: components["schemas"]["SqlPair"] | null;
         };
         AuditPage: {
             items: {
@@ -962,6 +1112,58 @@ export interface components {
             project_id: string;
             title: string;
         };
+        ProfilingSchedule: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            /** Format: uuid */
+            ownerId?: string | null;
+            /** @enum {string} */
+            kind: "profile_drift";
+            schedule: string;
+            timezone: string;
+            /** @enum {string} */
+            status: "active" | "paused";
+            /** @description For example owner_unavailable or owner_lacks_access. */
+            pausedReason?: string | null;
+            /** Format: date-time */
+            nextRunAt: string;
+            /** Format: date-time */
+            lastRunAt?: string | null;
+            /** @enum {string|null} */
+            lastStatus?: "succeeded" | "failed" | "skipped" | null;
+        };
+        DriftFinding: {
+            /** @enum {string} */
+            kind: "table_removed" | "column_removed" | "column_added" | "type_changed";
+            table: string;
+            model: string;
+            column?: string;
+            /** @description Type recorded in the MDL. */
+            expected?: string;
+            /** @description Type found in the database. */
+            actual?: string;
+            isPrimaryKey?: boolean;
+        };
+        DriftReport: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            /** @description The deployed revision that was compared. */
+            mdlVersion: number;
+            hasDrift: boolean;
+            summary: {
+                [key: string]: number;
+            };
+            findings: components["schemas"]["DriftFinding"][];
+            draftMdlVersion?: number | null;
+            /** Format: uuid */
+            createdBy?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
         Error: {
             /** @description FastAPI error detail. */
             detail?: string | Record<string, never>;
@@ -1011,6 +1213,55 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    oidcLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the identity provider. */
+            302: {
+                headers: {
+                    Location?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in; refresh token is set in an HttpOnly cookie. */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     refreshSession: {
@@ -1850,246 +2101,6 @@ export interface operations {
             422: components["responses"]["Error"];
         };
     };
-    listInstructions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Instructions of the project. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items?: components["schemas"]["KnowledgeInstruction"][];
-                    };
-                };
-            };
-        };
-    };
-    createInstruction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["KnowledgeInstructionRequest"];
-            };
-        };
-        responses: {
-            /** @description Instruction created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KnowledgeInstruction"];
-                };
-            };
-        };
-    };
-    deleteInstruction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                instruction_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Instruction deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
-        };
-    };
-    updateInstruction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                instruction_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["KnowledgeInstructionRequest"];
-            };
-        };
-        responses: {
-            /** @description Instruction updated. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KnowledgeInstruction"];
-                };
-            };
-            404: components["responses"]["Error"];
-        };
-    };
-    listSqlPairs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Approved question and SQL pairs. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items?: components["schemas"]["SqlPair"][];
-                    };
-                };
-            };
-        };
-    };
-    createSqlPair: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SqlPairRequest"];
-            };
-        };
-        responses: {
-            /** @description Pair created. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SqlPair"];
-                };
-            };
-        };
-    };
-    deleteSqlPair: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                pair_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Pair deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
-        };
-    };
-    listPairProposals: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Pending proposals, each with the nearest approved pair. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items?: components["schemas"]["PairProposalItem"][];
-                    };
-                };
-            };
-        };
-    };
-    approveProposal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Proposal approved and promoted to an SQL pair. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
-        };
-    };
-    rejectProposal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: components["parameters"]["ProjectId"];
-                proposal_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Proposal rejected. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
-        };
-    };
     listSampleProjectTemplates: {
         parameters: {
             query?: never;
@@ -2314,6 +2325,408 @@ export interface operations {
             422: components["responses"]["Error"];
         };
     };
+    getModelUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Totals and the most recent questions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        questions: number;
+                        llm_calls: number;
+                        llm_errors: number;
+                        prompt_tokens: number;
+                        completion_tokens: number;
+                        gpu_ms: number;
+                        avg_tokens_per_question: number;
+                        avg_gpu_ms_per_question: number;
+                        recent: {
+                            tokens: number;
+                            gpu_ms: number;
+                            llm_calls: number;
+                            latency_ms: number;
+                        }[];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    getSchedulerHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job and lease counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "ok" | "degraded";
+                        /** Format: date-time */
+                        checked_at: string;
+                        active: number;
+                        paused: number;
+                        overdue: number;
+                        last_failed?: number;
+                        running?: number;
+                        stale: number;
+                        failed_24h?: number;
+                        succeeded_24h?: number;
+                        /** Format: date-time */
+                        next_slot?: string | null;
+                        /** Format: date-time */
+                        last_run_at?: string | null;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listInstructions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instructions, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instruction"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text: string;
+                    /** @default true */
+                    active?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Instruction stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instruction"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instruction deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateInstruction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                instruction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text?: string;
+                    active?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Instruction updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instruction"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listSqlPairs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved question and logical-SQL pairs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPair"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createSqlPair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    question: string;
+                    logical_sql: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Pair approved and indexed. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPair"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteSqlPair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pair deleted and removed from the index. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    giveFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    message_id?: string;
+                    /** Format: uuid */
+                    thread_id?: string;
+                    /** @enum {string} */
+                    rating: "up" | "down";
+                    question: string;
+                    logical_sql: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Feedback stored; `proposal` is the pair now awaiting review, or null. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listProposals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Proposed pairs, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": (components["schemas"]["SqlPair"] & {
+                        nearest_approved?: components["schemas"]["SqlPair"] | null;
+                    })[];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    approveProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pair approved and indexed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPair"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    rejectProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                pair_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Proposal rejected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPair"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     createThread: {
         parameters: {
             query?: never;
@@ -2359,6 +2772,161 @@ export interface operations {
         };
         responses: {
             501: components["responses"]["Error"];
+        };
+    };
+    getProfilingSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfilingSchedule"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    setProfilingSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Five-field cron expression, at most every 15 minutes.
+                     * @example 0 3 * * *
+                     */
+                    schedule: string;
+                    /** @default UTC */
+                    timezone?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The saved schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfilingSchedule"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    deleteProfilingSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listDriftReports: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of reports. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["DriftReport"][];
+                        /** Format: date-time */
+                        nextCursor?: string | null;
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createDraftFromDrift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new draft revision. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        projectId?: string;
+                        /** Format: uuid */
+                        reportId?: string;
+                        revision?: number;
+                        baseRevision?: number;
+                        /** @enum {string} */
+                        status?: "draft";
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
 }

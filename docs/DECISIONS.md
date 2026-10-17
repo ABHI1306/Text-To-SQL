@@ -433,3 +433,64 @@ Second batch (all remaining findings; tests added, `make check` green):
 - **Demo data** (this install only, not code): E-commerce policies `orders_region` and
   `customers_region` (`region = {{ user.region }}`, DBA exempt), account `asha` (role User,
   region South), and DEMO dashboard, questions and shares.
+
+## Day 9: integration, drills and the accuracy gate
+
+Final state (2026-10-17). Run and passing: `make check` (898 passed), `make drills` (29),
+`make redteam` (70), UI build, vitest (36) and all 75 Playwright tests, and the full suite
+inside the Compose `tests` service against the live databases (1064 passed, 14 skipped; this
+includes the row-level-security and database-permission suites, none skipped). One run of that
+service showed 2 failures that did not repeat in four further runs; the cause was not found.
+`make offline` passed (details below).
+
+**The accuracy gate is not met and cannot be this session.** Zero of the golden-set
+references are approved (all `draft`), so `make eval` would be refused by the gate as
+provisional; approving them is a DBA review, not something to script. The only number is the
+provisional 20% (`reports/day5-baseline-provisional-20261013.json`) against 70%. The host has
+no GPU (see Hardware tier), and recent questions took 37-144 s, so the 20 s median target is
+also out of reach here until the model or hardware changes.
+- **D9-1 Playwright per role** (`ui/e2e/day9-roles.spec.ts`, 29 tests): DBA, User, custom role
+  (`Analyst+`), LDAP user and OIDC user against the mock API, which now has personas
+  (`mock-token:<username>`), the Day 7/8 endpoints and `/__mock/*` test switches. These cover UI
+  behaviour only; real LDAP and Keycloak logins are checked by `make offline`.
+- **D9-2 `make eval`**: runs the golden set in the api container, then `scripts/eval_gate.py`
+  fails unless references are approved (`status == baseline`), accuracy >= `EVAL_TARGET`
+  (0.70) and p50 <= 20 s. Needs `PROJECT_ID` and `USERNAME`.
+- **D9-3 `make offline`** (`scripts/offline-test.sh`, `docker-compose.offline.yml`): brings up
+  the stack with the LDAP, OIDC and offline overlays; probes egress from all eight services,
+  checks DNS, `/health/ready`, local and LDAP login, Keycloak discovery and the worker.
+  Finding: Keycloak sat on the non-internal `edge` network, so it could reach the internet.
+  The overlay makes `edge` internal and drops the host port (OIDC from a browser is unavailable
+  in that mode). Result: all 8 services blocked from 1.1.1.1, public DNS fails, `/health/ready`
+  ok, OpenLDAP StartTLS binds work, Keycloak discovery works, worker running. Needs
+  `OIDC_CLIENT_SECRET` and `KEYCLOAK_ADMIN_PASSWORD` set (they were missing from `.env`; the
+  run used throwaway values). Local and full LDAP app logins are skipped unless
+  `OFFLINE_LOCAL_USER/PASSWORD` or `OFFLINE_LDAP_USER/PASSWORD` are given: no group-to-role
+  mappings exist (`identity_mappings` is empty), so directory logins are denied by design.
+  Compose finding: the api healthcheck (`python -c "import ...; ..."`) is split at spaces by
+  this host's podman-backed compose and always failed; rewritten without spaces, the api now
+  reports healthy.
+- **D9-4 drills** (`tests/test_day9_drills.py`) and the fixes they forced:
+  - A database that was down came back as non-retryable `DRY_RUN_FAILED` and burned correction
+    attempts. It is now `DATABASE_UNAVAILABLE` (retryable), at both the dry run and execution.
+  - Self-issued access tokens had zero clock tolerance; a clock stepped back a few seconds
+    rejected fresh tokens. Added 30 s leeway (OIDC already had 60 s).
+  - Found by the new Playwright run: pausing or resuming a scheduled question blanked the whole
+    screen, because the API's JSON reply was stored as the notice text and React could not render
+    it (`ui/src/ScheduledScreen.tsx`). Fixed.
+  - Worker killed mid-job and scheduler clock back/forward are covered; existing behaviour held.
+- **D9-5 tracing and metrics**: the Ollama adapter records prompt/answer tokens and model busy
+  time (`app/observability/usage.py`); `done` events now carry real `tokens` and `gpu_ms`.
+  `GET /api/v1/ops/usage`, `/ops/scheduler` (`view_audit`) and `GET /health/ready` (dependency
+  up/down, 503 when any is down); new Operations screen. Counters are per process and reset on
+  restart. `gpu_ms` is Ollama's total call duration, not measured GPU utilisation. Langfuse
+  from the plan is **not** done.
+- **D9-6 open items**:
+  - Approve the golden-set references (DBA), then `make eval PROJECT_ID=... USERNAME=...`.
+  - Langfuse from the plan's tooling table is not built; the in-process counters and the
+    Operations screen cover the D9-5 views.
+  - `docs/openapi.yaml` had the knowledge-endpoint paths and the `SqlPair` schema defined
+    twice since Day 6, so `npm run generate:api` (run by CI) failed. The older copy was removed,
+    `/ops/usage` and `/ops/scheduler` were added, and `ui/src/api/schema.d.ts` was regenerated.
+    `/health/ready` is not in the spec (it sits outside the `/api/v1` base, like `/health`).
+  - `uv.lock` changed (`tzdata`, needed for legacy zone names such as `Asia/Calcutta`).

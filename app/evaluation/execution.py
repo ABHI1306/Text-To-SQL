@@ -40,6 +40,7 @@ _STAGE_BY_CODE = {
     "POLICY_ERROR": "compile",
     "DRY_RUN_FAILED": "validation",
     "TIMEOUT": "execution",
+    "DATABASE_UNAVAILABLE": "execution",
     "EMPTY_RESULT": "execution",
 }
 

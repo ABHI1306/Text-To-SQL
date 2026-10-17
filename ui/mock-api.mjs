@@ -80,6 +80,390 @@ function currentCapabilities() {
   return roles.find((item) => item.name === role)?.capabilities ?? []
 }
 
+// ---- Day 9: personas, row-level data and the Day 7/8 endpoints -----------------------------
+// A login with a username signs in that persona; its token is 'mock-token:<username>' and every
+// request derives role, capabilities and rows from it. The plain 'mock-token' (what every older spec
+// gets) stays the demo.dba DBA and keeps the old behaviour. State below is in memory and is
+// cleared with POST /__mock/reset (sent straight to the mock port, not through the Vite proxy).
+const personas = {
+  'demo.dba': { id: me.user_id, username: 'demo.dba', role: 'DBA', auth_source: 'local', region: null, capabilities: [...allCapabilities] },
+  maria: { id: uid(21), username: 'maria', role: 'User', auth_source: 'local', region: 'EU', capabilities: ['ask_question', 'give_feedback', 'view_shared'] },
+  // A custom role without view_shared: it builds and shares things but has no "Shared with me".
+  jonas: { id: uid(22), username: 'jonas', role: 'Analyst+', auth_source: 'local', region: 'US', capabilities: ['ask_question', 'give_feedback', 'create_dashboard', 'schedule_question', 'share'] },
+  'sam.ldap': { id: uid(23), username: 'sam.ldap', role: 'User', auth_source: 'ldap', region: 'North', capabilities: ['ask_question', 'give_feedback', 'view_shared'] },
+  'oidc.omar': { id: uid(24), username: 'oidc.omar', role: 'User', auth_source: 'oidc', region: 'South', capabilities: ['ask_question', 'give_feedback', 'view_shared'] },
+}
+const refreshCookie = /refresh_token=mock-refresh-token(?::([^;\s]+))?/
+
+// Row-level security model: one table, each persona only gets the rows of their own region.
+const customerColumns = ['customer_id', 'first_name', 'region']
+const customerRows = [
+  [1, 'Ada', 'EU'],
+  [2, 'Grace', 'South'],
+  [3, 'Linus', 'North'],
+  [4, 'Hedy', 'EU'],
+  [5, 'Alan', 'US'],
+  [6, 'Edsger', 'South'],
+]
+const rowsFor = (persona) => customerRows.filter((row) => !persona.region || row[2] === persona.region).map((row) => [...row])
+
+function personaFromToken(header) {
+  const name = String(header ?? '').match(/^Bearer mock-token:(.+)$/)?.[1]
+  const persona = personas[name ?? '']
+  return persona ? { persona, session: true } : { persona: personas['demo.dba'], session: false }
+}
+
+const auditActions = ['login_succeeded', 'ask_question', 'dashboard_created', 'share_created', 'role_changed']
+const auditTargets = { login_succeeded: 'account', login_failed: 'account', ask_question: 'thread', dashboard_created: 'dashboard', share_created: 'share', role_changed: 'role' }
+// 120 events, newest first; every tenth is a failed login so a filter has something to narrow to.
+const auditEvents = Array.from({ length: 120 }, (_, index) => {
+  const id = 120 - index
+  const action = id % 10 === 0 ? 'login_failed' : auditActions[id % 5]
+  return {
+    id,
+    actorId: action === 'login_failed' ? null : uid(21 + (id % 4)),
+    action,
+    resourceType: auditTargets[action],
+    resourceId: `6b8b4567-e89b-12d3-a456-${String(id).padStart(12, '0')}`,
+    details: { ip: '10.0.0.7', note: `mock event ${id}` },
+    createdAt: new Date(Date.now() - id * 60_000).toISOString(),
+  }
+})
+
+const baselineUsage = () => ({ questions: 0, llm_calls: 0, llm_errors: 0, prompt_tokens: 0, completion_tokens: 0, gpu_ms: 0, recent: [] })
+function freshDay9() {
+  return {
+    dashboards: [], // { id, owner, title, tiles: [{ id, saved_question_id, chart_spec, position_json }] }
+    savedQuestions: [], // { id, owner, question, logical_sql }
+    jobs: [], // { id, owner, saved_question_id, schedule, timezone, status, paused_reason, next_run_at, last_run_at, last_status }
+    runs: {}, // job id -> runs, newest first
+    shares: [], // { id, resource_type, resource_id, grantee_type, grantee_id, granted_at }
+    notifications: [
+      { id: 'n1', owner: 'demo.dba', kind: 'scheduled_run_failed', payload: { question: 'Customers by region', message: 'Warehouse connection timed out' }, created_at: new Date().toISOString(), read_at: null },
+    ],
+    usage: baselineUsage(),
+    scheduler: 'ok',
+  }
+}
+let day9 = freshDay9()
+
+/** Reset with seed: a DBA dashboard shared with the User role and a jonas question shared with sam.ldap. */
+function seedDay9() {
+  const regions = { id: 'sq-seed-regions', owner: 'demo.dba', question: 'Customers by region', logical_sql: 'SELECT customer_id, first_name, region FROM customers' }
+  const orders = { id: 'sq-seed-orders', owner: 'jonas', question: 'Orders this week', logical_sql: 'SELECT customer_id, first_name, region FROM customers' }
+  day9.savedQuestions.push(regions, orders)
+  day9.dashboards.push({ id: 'db-seed-regional', owner: 'demo.dba', title: 'Regional sales', tiles: [{ id: 'tile-seed-1', saved_question_id: regions.id, chart_spec: null, position_json: {} }] })
+  day9.shares.push(
+    { id: 'sh-seed-1', resource_type: 'dashboard', resource_id: 'db-seed-regional', grantee_type: 'role', grantee_id: 'User', granted_at: new Date().toISOString() },
+    { id: 'sh-seed-2', resource_type: 'saved_question', resource_id: orders.id, grantee_type: 'user', grantee_id: personas['sam.ldap'].id, granted_at: new Date().toISOString() },
+  )
+}
+
+function sessionResponse(persona, named) {
+  return {
+    status: 200,
+    payload: { access_token: named ? `mock-token:${persona.username}` : 'mock-token', token_type: 'bearer', expires_in: 900, must_change_password: false },
+    headers: { 'set-cookie': `refresh_token=mock-refresh-token${named ? `:${persona.username}` : ''}; HttpOnly; SameSite=Strict; Path=/api/v1/auth` },
+  }
+}
+
+function handleDay9(method, path, params, headers, body) {
+  const json = (status, payload) => ({ status, payload })
+  const m = (pattern) => path.match(pattern)
+  const p = '/api/v1'
+  let input = {}
+  try {
+    input = body ? JSON.parse(body) : {}
+  } catch {
+    input = {}
+  }
+  let hit
+
+  // test-only switches (called on the mock port directly)
+  if (method === 'POST' && path === '/__mock/reset') {
+    day9 = freshDay9()
+    if (input.seed) seedDay9()
+    if (input.scheduler) day9.scheduler = input.scheduler
+    return json(200, { ok: true })
+  }
+  if (method === 'POST' && path === '/__mock/scheduler') {
+    day9.scheduler = input.status === 'degraded' ? 'degraded' : 'ok'
+    return json(200, { scheduler: day9.scheduler })
+  }
+
+  // sign-in methods and persona selection
+  if (method === 'GET' && path === `${p}/auth/methods`) return json(200, { local: true, ldap: true, oidc: true, directory: true, sso: true })
+  if (method === 'GET' && path === `${p}/auth/oidc/login`) {
+    const persona = personas[params.get('as') ?? ''] ??personas['oidc.omar']
+    return { status: 302, headers: { location: '/', ...sessionResponse(persona, true).headers } }
+  }
+  if (method === 'POST' && path === `${p}/auth/login`) {
+    const persona = personas[String(input.username ?? '').toLowerCase()]
+    // OIDC accounts have no password; "wrong-password" lets a spec exercise the failure path.
+    if (!persona || persona.auth_source === 'oidc' || input.password === 'wrong-password') return json(401, { detail: 'Invalid username or password' })
+    return sessionResponse(persona, true)
+  }
+  if (method === 'POST' && path === `${p}/auth/refresh`) {
+    const name = String(headers.cookie ?? '').match(refreshCookie)?.[1]
+    const persona = personas[name ?? '']
+    return persona ? sessionResponse(persona, true) : sessionResponse(personas['demo.dba'], false)
+  }
+
+  const who = personaFromToken(headers.authorization)
+  const { persona } = who
+  const capabilities = who.session ? persona.capabilities : currentCapabilities()
+  const can = (capability) => capabilities.includes(capability)
+  const forbidden = (capability) => json(403, { detail: `Your role does not include ${capability}` })
+  const now = () => new Date().toISOString()
+  const viewerShares = (type, id) => day9.shares.filter((share) => share.resource_type === type && share.resource_id === id
+    && ((share.grantee_type === 'user' && share.grantee_id === persona.id) || (share.grantee_type === 'role' && share.grantee_id === persona.role)))
+  const dashboardFor = (id) => day9.dashboards.find((item) => item.id === id && (item.owner === persona.username || viewerShares('dashboard', id).length > 0))
+  const questionFor = (id) => day9.savedQuestions.find((item) => item.id === id && (item.owner === persona.username || viewerShares('saved_question', id).length > 0))
+  const resultFor = (question) => ({ columns: customerColumns, rows: rowsFor(persona), truncated: false, cached: false, computed_at: now(), question })
+  const ownsResource = (type, id) => {
+    if (type === 'dashboard') return day9.dashboards.find((item) => item.id === id)?.owner === persona.username
+    if (type === 'saved_question') return day9.savedQuestions.find((item) => item.id === id)?.owner === persona.username
+    return mockThreads.some((thread) => thread.id === id && thread.owner === persona.username)
+  }
+
+  if (method === 'GET' && path === `${p}/me` && who.session) {
+    return json(200, { ...me, user_id: persona.id, username: persona.username, role: persona.role, auth_source: persona.auth_source, capabilities, projects: [project] })
+  }
+
+  // ops: usage and scheduler health (view_audit)
+  if (method === 'GET' && path === `${p}/ops/usage`) {
+    if (!can('view_audit')) return forbidden('view_audit')
+    const usage = day9.usage
+    return json(200, { ...usage, avg_tokens_per_question: usage.questions ? Math.round((usage.prompt_tokens + usage.completion_tokens) / usage.questions) : 0, avg_gpu_ms_per_question: usage.questions ? Math.round(usage.gpu_ms / usage.questions) : 0 })
+  }
+  if (method === 'GET' && path === `${p}/ops/scheduler`) {
+    if (!can('view_audit')) return forbidden('view_audit')
+    const degraded = day9.scheduler === 'degraded'
+    return json(200, {
+      status: degraded ? 'degraded' : 'ok',
+      checked_at: now(),
+      active: day9.jobs.filter((job) => job.status === 'active').length,
+      paused: day9.jobs.filter((job) => job.status !== 'active').length,
+      overdue: degraded ? 3 : 0,
+      last_failed: degraded ? 2 : 0,
+      running: 0,
+      stale: degraded ? 1 : 0,
+      failed_24h: degraded ? 2 : 0,
+      succeeded_24h: 7,
+      next_slot: new Date(Date.now() + 3_600_000).toISOString(),
+      last_run_at: new Date(Date.now() - 600_000).toISOString(),
+    })
+  }
+
+  // audit browser (view_audit)
+  if (method === 'GET' && (path === `${p}/audit-events` || path === `${p}/audit-events/export.csv`)) {
+    if (!can('view_audit')) return forbidden('view_audit')
+    const filtered = auditEvents.filter((event) =>
+      (!params.get('actor_id') || event.actorId === params.get('actor_id'))
+      && (!params.get('action') || event.action === params.get('action'))
+      && (!params.get('resource_type') || event.resourceType === params.get('resource_type'))
+      && (!params.get('since') || event.createdAt >= params.get('since'))
+      && (!params.get('until') || event.createdAt < params.get('until')))
+    if (path.endsWith('.csv')) {
+      const lines = filtered.map((event) => [event.id, event.createdAt, event.actorId ?? '', event.action, event.resourceType, event.resourceId].join(','))
+      return { status: 200, contentType: 'text/csv', raw: ['id,created_at,actor_id,action,resource_type,resource_id', ...lines].join('\n') }
+    }
+    const cursor = Number(params.get('cursor') ?? 0)
+    const limit = Number(params.get('limit') ?? 50)
+    const after = cursor ? filtered.filter((event) => event.id < cursor) : filtered
+    const items = after.slice(0, limit)
+    return json(200, { items, nextCursor: after.length > limit ? items.at(-1).id : null })
+  }
+
+  // notifications
+  if (method === 'GET' && path === `${p}/notifications`) {
+    const items = day9.notifications.filter((item) => item.owner === persona.username).map(({ owner, ...rest }) => rest)
+    return json(200, items.slice(0, Number(params.get('limit') ?? 50)))
+  }
+  if (method === 'POST' && (hit = m(/^\/api\/v1\/notifications\/([^/]+)\/read$/))) {
+    const notice = day9.notifications.find((item) => item.id === hit[1] && item.owner === persona.username)
+    if (!notice) return json(404, { detail: 'Notification not found' })
+    notice.read_at = now()
+    return json(200, { id: notice.id, read_at: notice.read_at })
+  }
+
+  // saved questions
+  if ((hit = m(/^\/api\/v1\/projects\/[^/]+\/saved-questions$/))) {
+    if (method === 'GET') return json(200, day9.savedQuestions.filter((item) => item.owner === persona.username).map(({ id, question }) => ({ id, question })))
+    if (method === 'POST') {
+      if (!input.question || !input.logical_sql) return json(422, { detail: 'question and logical_sql are required' })
+      const saved = { id: crypto.randomUUID(), owner: persona.username, question: input.question, logical_sql: input.logical_sql }
+      day9.savedQuestions.push(saved)
+      return json(201, { id: saved.id })
+    }
+  }
+  if (method === 'GET' && (hit = m(/^\/api\/v1\/saved-questions\/([^/]+)\/result$/))) {
+    const saved = questionFor(hit[1])
+    return saved ? json(200, resultFor(saved.question)) : json(404, { detail: 'Saved question not found' })
+  }
+
+  // dashboards
+  if (path === `${p}/dashboards`) {
+    if (method === 'GET') return json(200, day9.dashboards.filter((item) => item.owner === persona.username).map(({ id, title }) => ({ id, title })))
+    if (method === 'POST') {
+      if (!can('create_dashboard')) return forbidden('create_dashboard')
+      if (!String(input.title ?? '').trim()) return json(422, { detail: 'A dashboard needs a title' })
+      const dashboard = { id: crypto.randomUUID(), owner: persona.username, title: String(input.title).trim(), tiles: [] }
+      day9.dashboards.push(dashboard)
+      return json(201, { id: dashboard.id, title: dashboard.title })
+    }
+  }
+  if ((hit = m(/^\/api\/v1\/dashboards\/([^/]+)(\/.*)?$/))) {
+    const [, id, rest = ''] = hit
+    const dashboard = dashboardFor(id)
+    if (!dashboard) return json(404, { detail: 'Dashboard not found' })
+    const isOwner = dashboard.owner === persona.username
+    const ownerOnly = () => json(403, { detail: 'Only the owner can change this dashboard' })
+    if (rest === '' && method === 'GET') return json(200, { id, title: dashboard.title, tiles: dashboard.tiles, is_owner: isOwner })
+    if (rest === '' && method === 'PATCH') {
+      if (!isOwner) return ownerOnly()
+      dashboard.title = String(input.title ?? dashboard.title)
+      return json(200, { id, title: dashboard.title })
+    }
+    if (rest === '' && method === 'DELETE') {
+      if (!isOwner) return ownerOnly()
+      day9.dashboards = day9.dashboards.filter((item) => item.id !== id)
+      day9.shares = day9.shares.filter((share) => !(share.resource_type === 'dashboard' && share.resource_id === id))
+      return json(204)
+    }
+    if (rest === '/tiles' && method === 'PUT') {
+      if (!isOwner) return ownerOnly()
+      const tiles = input.tiles ?? []
+      if (tiles.some((tile) => !day9.savedQuestions.some((item) => item.id === tile.saved_question_id && item.owner === persona.username))) {
+        return json(404, { detail: 'Saved question not found' })
+      }
+      dashboard.tiles = tiles.map((tile) => ({ id: `tile-${nextId++}`, saved_question_id: tile.saved_question_id, chart_spec: tile.chart_spec ?? null, position_json: tile.position ?? {} }))
+      return json(200, { id, tiles: dashboard.tiles })
+    }
+    if (rest === '/refresh' && method === 'POST') {
+      if (!isOwner) return ownerOnly()
+      return json(200, { refreshed_tiles: dashboard.tiles.length })
+    }
+    const tileHit = rest.match(/^\/tiles\/([^/]+)\/result$/)
+    if (tileHit && method === 'GET') {
+      const tile = dashboard.tiles.find((item) => item.id === tileHit[1])
+      const saved = day9.savedQuestions.find((item) => item.id === tile?.saved_question_id)
+      return tile && saved ? json(200, resultFor(saved.question)) : json(404, { detail: 'Tile not found' })
+    }
+  }
+
+  // sharing (read-only grants to a person or a role)
+  if (method === 'GET' && path === `${p}/share-targets`) {
+    if (!can('share')) return forbidden('share')
+    return json(200, {
+      users: Object.values(personas).filter((item) => item.username !== persona.username).map(({ id, username, role }) => ({ id, username, role })),
+      roles: ['DBA', 'Admin', 'User', 'Analyst+'].map((name) => ({ name })),
+    })
+  }
+  if (path === `${p}/shares`) {
+    if (!can('share')) return forbidden('share')
+    if (method === 'GET') {
+      const type = params.get('resource_type')
+      const id = params.get('resource_id')
+      if (!ownsResource(type, id)) return json(403, { detail: 'Only the owner can see who it is shared with' })
+      return json(200, day9.shares.filter((share) => share.resource_type === type && share.resource_id === id).map(({ resource_type, resource_id, ...rest }) => rest))
+    }
+    if (method === 'POST') {
+      if (!ownsResource(input.resource_type, input.resource_id)) return json(404, { detail: 'Nothing to share' })
+      const known = input.grantee_type === 'role'
+        ? ['DBA', 'Admin', 'User', 'Analyst+'].includes(input.grantee_id)
+        : Object.values(personas).some((item) => item.id === input.grantee_id)
+      if (!known) return json(404, { detail: 'Person or role not found' })
+      if (day9.shares.some((share) => share.resource_type === input.resource_type && share.resource_id === input.resource_id
+        && share.grantee_type === input.grantee_type && share.grantee_id === input.grantee_id)) {
+        return json(409, { detail: 'Already shared with them' })
+      }
+      const share = { id: crypto.randomUUID(), resource_type: input.resource_type, resource_id: input.resource_id, grantee_type: input.grantee_type, grantee_id: input.grantee_id, granted_at: now() }
+      day9.shares.push(share)
+      return json(201, share)
+    }
+  }
+  if (method === 'DELETE' && (hit = m(/^\/api\/v1\/shares\/([^/]+)$/))) {
+    const share = day9.shares.find((item) => item.id === hit[1])
+    if (!share) return json(404, { detail: 'Share not found' })
+    if (!ownsResource(share.resource_type, share.resource_id)) return json(403, { detail: 'Only the owner can revoke a share' })
+    day9.shares = day9.shares.filter((item) => item.id !== share.id)
+    return json(204)
+  }
+  if (method === 'GET' && path === `${p}/shared-with-me`) {
+    if (!can('view_shared')) return forbidden('view_shared')
+    const seen = new Set()
+    const items = []
+    for (const share of [...day9.shares].reverse()) {
+      const mine = (share.grantee_type === 'user' && share.grantee_id === persona.id) || (share.grantee_type === 'role' && share.grantee_id === persona.role)
+      const key = `${share.resource_type}:${share.resource_id}`
+      if (!mine || seen.has(key)) continue
+      const title = share.resource_type === 'dashboard' ? day9.dashboards.find((item) => item.id === share.resource_id)?.title
+        : share.resource_type === 'saved_question' ? day9.savedQuestions.find((item) => item.id === share.resource_id)?.question
+          : mockThreads.find((thread) => thread.id === share.resource_id)?.title
+      if (title === undefined) continue
+      seen.add(key)
+      items.push({ share_id: share.id, resource_type: share.resource_type, resource_id: share.resource_id, title, granted_at: share.granted_at })
+    }
+    return json(200, items)
+  }
+
+  // scheduled questions (schedule_question)
+  if (path === `${p}/scheduled-questions` || path.startsWith(`${p}/scheduled-questions/`)) {
+    if (!can('schedule_question')) return forbidden('schedule_question')
+    if (path === `${p}/scheduled-questions`) {
+      if (method === 'GET') return json(200, day9.jobs.filter((job) => job.owner === persona.username).map(({ owner, ...rest }) => rest))
+      if (method === 'POST') {
+        if (!day9.savedQuestions.some((item) => item.id === input.saved_question_id && item.owner === persona.username)) return json(404, { detail: 'Saved question not found' })
+        const schedule = String(input.schedule ?? '')
+        if (!['hourly', 'daily', 'weekly'].includes(schedule) && schedule.trim().split(/\s+/).length !== 5) return json(422, { detail: 'Not a valid cron expression' })
+        const job = {
+          id: crypto.randomUUID(), owner: persona.username, saved_question_id: input.saved_question_id, schedule,
+          timezone: input.timezone || 'UTC', status: 'active', paused_reason: null,
+          next_run_at: new Date(Date.now() + 3_600_000).toISOString(), last_run_at: null, last_status: null,
+        }
+        day9.jobs.push(job)
+        day9.runs[job.id] = []
+        const { owner, ...rest } = job
+        return json(201, rest)
+      }
+    }
+    if ((hit = m(/^\/api\/v1\/scheduled-questions\/([^/]+)(?:\/(pause|resume|run-now|runs))?$/))) {
+      const [, id, action] = hit
+      const job = day9.jobs.find((item) => item.id === id && item.owner === persona.username)
+      if (!job) return json(404, { detail: 'Schedule not found' })
+      if (!action && method === 'DELETE') {
+        day9.jobs = day9.jobs.filter((item) => item.id !== id)
+        return json(204)
+      }
+      if (action === 'runs' && method === 'GET') return json(200, day9.runs[id] ?? [])
+      if (action === 'pause' && method === 'POST') {
+        Object.assign(job, { status: 'paused', paused_reason: 'user_paused' })
+        return json(200, { id, status: job.status })
+      }
+      if (action === 'resume' && method === 'POST') {
+        Object.assign(job, { status: 'active', paused_reason: null })
+        return json(200, { id, status: job.status })
+      }
+      if (action === 'run-now' && method === 'POST') {
+        const question = day9.savedQuestions.find((item) => item.id === job.saved_question_id)?.question ?? ''
+        const failed = /fail/i.test(question) // a question with "fail" in it models a broken schedule
+        const run = {
+          id: crypto.randomUUID(), started_at: now(), status: failed ? 'failed' : 'succeeded',
+          row_count: failed ? null : rowsFor(persona).length, error: failed ? 'Warehouse connection timed out' : null, trigger: 'manual',
+        }
+        day9.runs[id] = [run, ...(day9.runs[id] ?? [])]
+        Object.assign(job, { last_run_at: run.started_at, last_status: run.status })
+        if (failed) {
+          day9.notifications.unshift({ id: `n${nextId++}`, owner: persona.username, kind: 'scheduled_run_failed', payload: { question, message: run.error }, created_at: now(), read_at: null })
+        }
+        return json(200, run)
+      }
+    }
+  }
+  return null
+}
+
 function handleAdmin(method, path, body) {
   const m = (pattern) => path.match(pattern)
   const json = (status, payload) => ({ status, payload })
@@ -250,6 +634,18 @@ const server = createServer(async (request, response) => {
   let status = 200
   let payload
 
+  const handled = handleDay9(request.method ?? 'GET', url.pathname, url.searchParams, request.headers, body)
+  if (handled) {
+    response.writeHead(handled.status, {
+      'content-type': handled.contentType ?? 'application/json',
+      'access-control-allow-origin': '*',
+      ...handled.headers,
+    })
+    response.end([204, 302].includes(handled.status) ? undefined : (handled.raw ?? JSON.stringify(handled.payload)))
+    return
+  }
+  const { persona, session } = personaFromToken(request.headers.authorization)
+
   const admin = handleAdmin(request.method ?? 'GET', url.pathname, body)
   if (admin) {
     response.writeHead(admin.status, {
@@ -265,13 +661,13 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify(payload))
   }
   if (request.method === 'POST' && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/threads$/)) {
-    const thread = { id: crypto.randomUUID(), title: '', turns: 0, last_activity: new Date().toISOString(), messages: [] }
+    const thread = { id: crypto.randomUUID(), owner: persona.username, title: '', turns: 0, last_activity: new Date().toISOString(), messages: [] }
     mockThreads.push(thread)
     json(201, { id: thread.id, project_id: url.pathname.split('/')[4] })
     return
   }
   if (request.method === 'GET' && url.pathname.match(/^\/api\/v1\/projects\/[^/]+\/threads$/)) {
-    json(200, { items: mockThreads.filter((t) => t.turns > 0).map(({ messages, ...rest }) => rest).reverse() })
+    json(200, { items: mockThreads.filter((t) => t.turns > 0 && t.owner === persona.username).map(({ messages, owner, ...rest }) => rest).reverse() })
     return
   }
   if (request.method === 'GET' && url.pathname.match(/^\/api\/v1\/threads\/[^/]+$/)) {
@@ -285,7 +681,9 @@ const server = createServer(async (request, response) => {
     return
   }
   if (request.method === 'POST' && url.pathname.match(/^\/api\/v1\/messages\/[^/]+\/(feedback|run)$/)) {
-    if (url.pathname.endsWith('/run')) {
+    if (url.pathname.endsWith('/run') && session) {
+      json(200, { columns: customerColumns, rows: rowsFor(persona), truncated: false, row_count: rowsFor(persona).length, sql: 'SELECT customer_id, first_name, region FROM ecommerce.customers' })
+    } else if (url.pathname.endsWith('/run')) {
       json(200, { columns: ['customer_id', 'first_name'], rows: [[1, 'Ada'], [2, 'Grace']], truncated: false, row_count: 2, sql: 'WITH m_customers AS (SELECT customer_id, first_name FROM ecommerce.customers) SELECT customer_id, first_name FROM m_customers AS customers' })
     } else {
       json(201, { id: 'fb-1', rating: JSON.parse(body || '{}').rating, proposal: null })
@@ -318,7 +716,8 @@ const server = createServer(async (request, response) => {
     const send = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)
     const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    if (!activeRevision) {
+    // Day 9 persona sessions always have a deployed model, so they can ask without running Setup.
+    if (!activeRevision && !session) {
       send('error', { code: 'NO_MODEL', message: 'Deploy a semantic model before asking questions', retryable: false })
       response.end()
       return
@@ -341,24 +740,31 @@ const server = createServer(async (request, response) => {
     send('compilation', { ok: true, errors: [], sql: 'WITH m_customers AS (SELECT customer_id, first_name FROM ecommerce.customers) SELECT customer_id, first_name FROM m_customers AS customers ORDER BY customer_id LIMIT 1000', ms: 4 })
     send('validation', { ok: true, errors: [], ms: 9 })
     await pause(40)
-    send('rows', { columns: ['customer_id', 'first_name'], rows: [[1, 'Mock customer'], [2, 'Preview customer']], truncated: false, row_count: 2, ms: 11 })
+    if (session) {
+      const rows = rowsFor(persona)
+      send('rows', { columns: customerColumns, rows, truncated: false, row_count: rows.length, ms: 11 })
+      // one answered question: 900 prompt + 300 answer tokens, 4.3 s of GPU, two model calls
+      Object.assign(day9.usage, {
+        questions: day9.usage.questions + 1,
+        llm_calls: day9.usage.llm_calls + 2,
+        prompt_tokens: day9.usage.prompt_tokens + 900,
+        completion_tokens: day9.usage.completion_tokens + 300,
+        gpu_ms: day9.usage.gpu_ms + 4300,
+        recent: [...day9.usage.recent, { tokens: 1200, gpu_ms: 4300, llm_calls: 2, latency_ms: 5100 }],
+      })
+    } else {
+      send('rows', { columns: ['customer_id', 'first_name'], rows: [[1, 'Mock customer'], [2, 'Preview customer']], truncated: false, row_count: 2, ms: 11 })
+    }
     send('done', { message_id: 'm1', latency_ms: 106, attempts: 0 })
     response.end()
     return
   }
 
-  if (
-    request.method === 'POST'
-    && ['/api/v1/auth/login', '/api/v1/auth/refresh'].includes(url.pathname)
-  ) {
-    payload = {
-      access_token: 'mock-token',
-      token_type: 'bearer',
-      expires_in: 900,
-      must_change_password: false,
-    }
-  } else if (request.method === 'POST' && url.pathname === '/api/v1/auth/logout') {
+  // login and refresh (persona selection) are handled in handleDay9
+  let setCookie
+  if (request.method === 'POST' && url.pathname === '/api/v1/auth/logout') {
     status = 204
+    setCookie = 'refresh_token=; HttpOnly; SameSite=Strict; Path=/api/v1/auth; Max-Age=0'
   } else if (request.method === 'POST' && url.pathname === '/api/v1/auth/change-password') {
     status = 204
   } else if (request.method === 'GET' && url.pathname === '/api/v1/me') {
@@ -574,7 +980,7 @@ const server = createServer(async (request, response) => {
   response.writeHead(status, {
     'content-type': 'application/json',
     'access-control-allow-origin': '*',
-    'set-cookie': 'refresh_token=mock-refresh-token; HttpOnly; SameSite=Strict; Path=/api/v1/auth',
+    ...(setCookie ? { 'set-cookie': setCookie } : {}),
   })
   response.end(status === 204 ? undefined : JSON.stringify(payload))
 })

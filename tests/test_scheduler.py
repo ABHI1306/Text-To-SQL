@@ -275,3 +275,9 @@ def test_a_failing_poll_does_not_stop_the_scheduler() -> None:
     time.sleep(0.5)
     service.stop()
     assert Broken.calls >= 2
+
+
+@pytest.mark.parametrize("zone", ["Asia/Calcutta", "Asia/Kolkata", "America/Buenos_Aires", "US/Eastern"])
+def test_legacy_and_current_time_zone_names_are_accepted(zone: str) -> None:
+    # browsers still report legacy aliases such as Asia/Calcutta; slim images ship no zone data
+    validate_schedule("0 6 * * 1", zone, datetime.now(UTC))

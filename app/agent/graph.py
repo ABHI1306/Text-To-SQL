@@ -197,6 +197,9 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
                 ValidatedQuery(sql=sql, parameters=state.get("parameters") or {})
             )
         except Exception as error:  # noqa: BLE001 - fail closed into a typed failure
+            if _database_unreachable(error, getattr(error, "sqlstate", None)):
+                # retrying the model cannot help; say so instead of spending correction attempts
+                return {"failure": classify_execution_error(error), "validation_errors": []}
             # The PostgreSQL message names physical objects, so the model only gets the code.
             return {
                 "validation_errors": [
@@ -324,6 +327,8 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
     def after_validate(
         state: AgentState,
     ) -> Literal["execute_sql", "correct_sql", "structured_failure"]:
+        if state.get("failure"):
+            return "structured_failure"
         if not state.get("validation_errors"):
             return "execute_sql"
         return retry_or_fail(state)
@@ -481,7 +486,28 @@ def classify_execution_error(error: Exception) -> StructuredFailure:
         return StructuredFailure("TIMEOUT", "The query took too long and was stopped.", True)
     if sqlstate == "42501":
         return StructuredFailure("FORBIDDEN", "The database refused this query.")
+    if _database_unreachable(error, sqlstate):
+        return StructuredFailure(
+            "DATABASE_UNAVAILABLE", "The database is not reachable right now. Try again shortly.", True
+        )
     return StructuredFailure("DRY_RUN_FAILED", "The database could not run the query.")
+
+
+_UNREACHABLE_ERRORS = frozenset(
+    {"OperationalError", "InterfaceError", "PoolTimeout", "ConnectionTimeout", "PoolClosed"}
+)
+# connection exceptions (class 08), shutdown in progress (57P01-57P03), too many connections
+_UNREACHABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03", "53300"})
+
+
+def _database_unreachable(error: Exception, sqlstate: object) -> bool:
+    """True when the server could not be reached, as opposed to refusing or failing the query."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(sqlstate, str) and (sqlstate.startswith("08") or sqlstate in _UNREACHABLE_SQLSTATES):
+        return True
+    # a driver error without an SQLSTATE never got an answer from the server
+    return sqlstate is None and type(error).__name__ in _UNREACHABLE_ERRORS
 
 
 def _usable_pairs(retrieval: RetrievalResult, mdl: Mdl) -> list[SqlPair]:

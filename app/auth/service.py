@@ -24,6 +24,8 @@ from app.ports.identity import VerifiedIdentity
 
 MIN_PASSWORD_LENGTH = 12
 _ISSUER = "text2sql-local"
+# A clock stepped back by NTP must not reject a token this server issued seconds ago.
+CLOCK_SKEW_LEEWAY_SECONDS = 30
 
 
 class AuthenticationError(ValueError):
@@ -335,6 +337,7 @@ class AuthService:
                 self._jwt_secret,
                 algorithms=["HS256"],
                 issuer=_ISSUER,
+                leeway=CLOCK_SKEW_LEEWAY_SECONDS,
                 options={"require": ["exp", "iat", "iss", "sub", "jti"]},
             )
         except jwt.InvalidTokenError as error:

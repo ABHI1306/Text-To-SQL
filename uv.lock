@@ -2197,6 +2197,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlglot" },
     { name = "structlog" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2241,6 +2242,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.1.4" },
     { name = "sqlglot", specifier = ">=30.0.0" },
     { name = "structlog", specifier = ">=24.2.0" },
+    { name = "tzdata", specifier = ">=2026.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["dev"]

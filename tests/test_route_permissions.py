@@ -19,6 +19,7 @@ from app.api.collab_routes import router as collab_router
 from app.api.eval_routes import router as eval_router
 from app.api.governance_routes import router as governance_router
 from app.api.knowledge_routes import router as knowledge_router
+from app.api.ops_routes import router as ops_router
 from app.api.routes import _CAPABILITIES, router
 from app.api.thread_routes import router as thread_router
 from app.auth.models import AuthContext
@@ -75,7 +76,7 @@ def _routes() -> list[RouteInfo]:
     for route in [
         *router.routes, *governance_router.routes, *ask_router.routes,
         *knowledge_router.routes, *admin_router.routes, *thread_router.routes,
-        *collab_router.routes, *eval_router.routes,
+        *collab_router.routes, *eval_router.routes, *ops_router.routes,
     ]:
         assert isinstance(route, APIRoute)
         capabilities = {
@@ -136,6 +137,7 @@ def _client(context: AuthContext) -> TestClient:
     app.include_router(thread_router)
     app.include_router(collab_router)
     app.include_router(eval_router)
+    app.include_router(ops_router)
     app.dependency_overrides[dependencies.get_current_context] = lambda: context
     app.dependency_overrides[dependencies.get_repository] = lambda: MagicMock()
     app.dependency_overrides[dependencies.get_knowledge_service] = lambda: MagicMock()

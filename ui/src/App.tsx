@@ -4,6 +4,7 @@ import { hasCapability } from './api/access'
 import type { components } from './api/schema'
 import { AnswerPanel } from './AnswerPanel'
 import { AuditScreen } from './AuditScreen'
+import { OperationsScreen } from './OperationsScreen'
 import { DashboardsScreen } from './DashboardsScreen'
 import { DriftScreen } from './DriftScreen'
 import { EvaluationScreen } from './EvaluationScreen'
@@ -46,6 +47,7 @@ type Page =
   | 'Row policies'
   | 'Users and roles'
   | 'Audit'
+  | 'Operations'
   | 'Evaluation'
 
 
@@ -61,6 +63,7 @@ const navigation: { page: Page; group: 'ASK' | 'WORK' | 'ADMIN' | 'SYSTEM'; capa
   { page: 'Row policies', group: 'ADMIN', capability: 'manage_policies' },
   { page: 'Users and roles', group: 'SYSTEM', capability: 'manage_users' },
   { page: 'Audit', group: 'SYSTEM', capability: 'view_audit' },
+  { page: 'Operations', group: 'SYSTEM', capability: 'view_audit' },
   { page: 'Evaluation', group: 'SYSTEM', capability: 'run_eval' },
 ]
 
@@ -73,16 +76,11 @@ const adminPages: Page[] = [
   'Row policies',
   'Users and roles',
   'Audit',
+  'Operations',
   'Evaluation',
 ]
 
 const mobileNavigation: Page[] = ['Home', 'Shared with me', 'Dashboards']
-
-const suggestions = [
-  'Break it down by region',
-  'Compare with the previous quarter',
-  'Show as a monthly trend',
-]
 
 
 const PROJECT_KEY = 'selectedProjectId'
@@ -882,11 +880,6 @@ function App() {
               </div>
 
               <div className="composer-area">
-                <div className="suggestion-list">
-                  {suggestions.map((suggestion) => (
-                    <button disabled={!selectedProjectId || busy} key={suggestion} onClick={() => void submitQuestion(suggestion)} type="button">{suggestion}</button>
-                  ))}
-                </div>
                 <form className="question-composer" onSubmit={(event) => { event.preventDefault(); void submitQuestion() }}>
                   <textarea
                     aria-label="Ask a question about your data"
@@ -975,6 +968,8 @@ function App() {
             />
           ) : activePage === 'Audit' ? (
             <AuditScreen apiRequest={apiRequest} />
+          ) : activePage === 'Operations' ? (
+            <OperationsScreen apiRequest={apiRequest} />
           ) : activePage === 'Evaluation' ? (
             <EvaluationScreen apiRequest={apiRequest} key={selectedProjectId ?? 'none'} projectId={selectedProjectId ?? undefined} />
           ) : activePage === 'Knowledge' ? (
@@ -1050,6 +1045,7 @@ function NavGlyph({ page }: { page: Page }) {
     'Row policies': '⬡',
     'Users and roles': '♙',
     Audit: '▣',
+    Operations: '◔',
     Evaluation: '◉',
   }
   return <span className="nav-glyph" aria-hidden="true">{glyphs[page]}</span>

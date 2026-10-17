@@ -1,0 +1,11 @@
+# Offline test overlay: no service may reach anything outside the Compose project.
+#   make offline
+# The oidc overlay puts Keycloak on an "edge" network so the browser can reach it on a host
+# port. For the offline test that network becomes internal too and the port is dropped; the api
+# still reaches Keycloak at keycloak:8080 over the internal "local" network.
+services:
+  keycloak:
+    ports: !reset []
+networks:
+  edge:
+    internal: true
