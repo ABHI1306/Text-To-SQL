@@ -494,3 +494,52 @@ also out of reach here until the model or hardware changes.
     `/ops/usage` and `/ops/scheduler` were added, and `ui/src/api/schema.d.ts` was regenerated.
     `/health/ready` is not in the spec (it sits outside the `/api/v1` base, like `/health`).
   - `uv.lock` changed (`tzdata`, needed for legacy zone names such as `Asia/Calcutta`).
+
+## Day 10: packaging and handover
+
+- **Run it**: `make init-env` (random secrets, prints the first DBA password, never overwrites an
+  existing `.env`), `make up` (build, start, migrate), `make models`, `make bootstrap` (creates
+  the DBA and clears the password from `.env`). `GPU=1` adds `docker-compose.gpu.yml` (NVIDIA
+  only, untested here); `IDENTITY=1` adds OpenLDAP and Keycloak.
+- **Pinned images, fully qualified**: `docker.io/library/postgres:16.15`, qdrant v1.15.4, ollama
+  0.12.6, openldap 1.5.0, keycloak 26.0.7, `python:3.13.16-slim`, uv 0.8.15. Fully qualified
+  because a fresh Podman host cannot resolve short names; found by pulling `postgres:16.15`.
+- **New operator tooling** (`app/cli/maintenance.py`): `rotate-connection-key` (re-encrypts every
+  saved connection in one transaction; a wrong old key changes nothing) and `reindex`
+  (rebuilds a project's index from its deployed model). Before this the deploy route refused
+  to re-deploy a live revision and there was no way to rotate the encryption key.
+- **README** is now the quick start, an architecture diagram and troubleshooting; Day 1-6
+  progress notes moved to `docs/BUILD_LOG.md`. New: `docs/RUNBOOK.md`, `docs/DEMO.md`,
+  `docs/EVALUATION.md`, `docs/KNOWN_ISSUES.md`, `docs/PROJECT.md`. The plan calls the
+  as-built document `docs/PROJECT.md`; the PDF remains the plan.
+- **Verified live**: `make reindex` on a deployed project (53 chunks before and after).
+  `make rotate-key` was rehearsed on a `pg_dump` copy of the metadata database (38 projects):
+  only 2 connections were readable with the current key, because 36 test projects carry
+  throwaway keys. That exposed two flaws, both fixed: the strict run blocked forever without
+  naming the offenders (now it names them and `--skip-unreadable` opts in to leaving them), and
+  `--skip-unreadable` with a wrong old key reported success after rotating nothing (now an
+  error). Re-checked on the copy: readable rows decrypt under the new key only with identical
+  plaintext, unreadable rows are byte-for-byte unchanged, a wrong key changes nothing.
+- **Fresh-clone run** (clean copy of the tree, own Compose project and ports, model files
+  shared from the existing volume): `make init-env`, `make up` (empty database migrated 0001 to
+  0008), `make bootstrap`, `/health/ready`. DBA changed the temporary password, created the
+  E-commerce sample project, deployed (82 chunks) and got "We have 3 customers." in 98 s on
+  CPU. A `make user-create` account with role User was granted project access, changed its
+  password, was refused the model editor and audit log (403), and answered "How many orders are
+  there?" in 94 s. Not covered: clicking through the UI (the API was used for the same steps),
+  and pulling the models (`make models`) on a machine with an empty model volume.
+  Host ports for the API and Qdrant are now configurable (`API_HOST_PORT`, `QDRANT_HOST_PORT`) so
+  a second copy can run beside the first.
+- **Not done**: the `v0.1.0` tag (needs a commit first). The accuracy gate was run and failed; see the addendum below.
+
+### Day 10 addendum: references approved and the first real baseline
+
+- At the DBA's request (they do not read SQL) Claude reviewed `tests/data/execution_references.json`
+  on 2026-10-17: 13 approved, 6 rejected (4 need tables the sample model lacks; 2 return no rows on
+  the demo data). Each approval is recorded as delegated. This is weaker than a DBA's review and is
+  labelled so in the file, in EVALUATION.md and in KNOWN_ISSUES.
+- `scripts/evaluate_execution.py` could not be run as written (it cannot import `app` when run as a
+  file); it is now run as `python -m scripts.evaluate_execution`. `--include-draft` no longer
+  scores `rejected` references. `make eval` rebuilds the api first because the golden set is
+  baked into the image; before that it silently saw the old file and reported "not measurable".
+- Result: 7.7% accuracy, 143.6 s median, gate failed (EVALUATION.md). Not tuned to the references.

@@ -1,4 +1,4 @@
-.PHONY: install check test lint format user-bootstrap-dba user-create user-reset-dba eval redteam rls drills e2e offline day9
+.PHONY: install check test lint format user-bootstrap-dba user-create user-reset-dba eval redteam rls drills e2e offline day9 init-env up down logs migrate models bootstrap reindex rotate-key
 ROLE ?= DBA
 
 install:
@@ -41,11 +41,13 @@ EVAL_OUT ?= reports/eval-$(shell date +%Y%m%d).json
 
 # D9-2: the golden set through the real pipeline (needs the stack, Ollama and Qdrant running),
 # then the accuracy gate. Fails below EVAL_TARGET or when the references are unapproved drafts.
+# INCLUDE_DRAFT=1 scores the draft references too: a provisional number, and the gate still fails.
 eval:
 	test -n "$(PROJECT_ID)" -a -n "$(USERNAME)" || (echo "Set PROJECT_ID and USERNAME"; exit 2)
 	mkdir -p reports
-	docker compose --env-file .env exec -T api uv run --no-sync python scripts/evaluate_execution.py \
-		--project-id "$(PROJECT_ID)" --username "$(USERNAME)" > "$(EVAL_OUT)"
+	docker compose --env-file .env up -d --build api   # the golden set is baked into the image
+	docker compose --env-file .env exec -T api uv run --no-sync python -m scripts.evaluate_execution \
+		--project-id "$(PROJECT_ID)" --username "$(USERNAME)" $(if $(INCLUDE_DRAFT),--include-draft) > "$(EVAL_OUT)"
 	uv run -- python scripts/eval_gate.py "$(EVAL_OUT)" --target $(EVAL_TARGET)
 
 redteam:
@@ -68,3 +70,56 @@ offline:
 
 # Everything the Day 9 exit gate names, in the order of the plan's primary prompt.
 day9: check redteam rls drills e2e offline eval
+
+# ---- Day 10: run the stack -------------------------------------------------------------------
+# GPU=1 adds the NVIDIA overlay; IDENTITY=1 adds OpenLDAP and Keycloak (needs the secrets in
+# docs/RUNBOOK.md and `sh scripts/ldap/make-certs.sh`).
+COMPOSE = docker compose --env-file .env -f docker-compose.yml \
+	$(if $(GPU),-f docker-compose.gpu.yml) \
+	$(if $(IDENTITY),-f docker-compose.ldap.yml -f docker-compose.oidc.yml --profile identity-demo)
+SQL_MODEL_NAME = $(shell sed -n 's/^SQL_MODEL=//p' .env)
+EMBEDDING_MODEL_NAME = $(shell sed -n 's/^EMBEDDING_MODEL=//p' .env)
+SMALL_MODEL_NAME = $(shell sed -n 's/^SMALL_MODEL=//p' .env)
+
+init-env:
+	./scripts/init-env.sh
+
+# Build and start everything, then apply migrations.
+up:
+	test -f .env || (echo "No .env: run 'make init-env' first"; exit 2)
+	$(COMPOSE) up -d --build --wait
+	$(COMPOSE) --profile tools run --rm migrate
+
+down:
+	$(COMPOSE) down
+
+logs:
+	$(COMPOSE) logs -f --tail=100 api worker
+
+migrate:
+	$(COMPOSE) --profile tools run --rm migrate
+
+# Model weights are never downloaded automatically. This pulls the ones named in .env.
+models:
+	$(COMPOSE) exec ollama ollama pull "$(SQL_MODEL_NAME)"
+	$(COMPOSE) exec ollama ollama pull "$(EMBEDDING_MODEL_NAME)"
+	test -z "$(SMALL_MODEL_NAME)" || $(COMPOSE) exec ollama ollama pull "$(SMALL_MODEL_NAME)"
+
+# Create the first DBA from BOOTSTRAP_DBA_USERNAME / BOOTSTRAP_DBA_PASSWORD, then clear the password.
+bootstrap:
+	$(COMPOSE) run --rm api uv run --no-sync python -m app.cli.users bootstrap-dba
+	sed -i 's/^BOOTSTRAP_DBA_PASSWORD=.*/BOOTSTRAP_DBA_PASSWORD=/' .env
+	$(COMPOSE) up -d --force-recreate api
+
+# Rebuild a project's search index from its deployed model (after changing EMBEDDING_MODEL).
+reindex:
+	test -n "$(PROJECT_ID)" || (echo "Set PROJECT_ID"; exit 2)
+	$(COMPOSE) run --build --rm api uv run --no-sync python -m app.cli.maintenance reindex --project-id "$(PROJECT_ID)"
+
+# After putting the new key in CONNECTION_ENCRYPTION_KEY: make rotate-key OLD=<previous key>
+# Add SKIP_UNREADABLE=1 to leave connections the old key cannot read (already unusable).
+rotate-key:
+	test -n "$(OLD)" || (echo "Set OLD to the previous CONNECTION_ENCRYPTION_KEY"; exit 2)
+	$(COMPOSE) run --build --rm -e OLD_CONNECTION_ENCRYPTION_KEY="$(OLD)" api \
+		uv run --no-sync python -m app.cli.maintenance rotate-connection-key $(if $(SKIP_UNREADABLE),--skip-unreadable)
+	$(COMPOSE) up -d --force-recreate api worker

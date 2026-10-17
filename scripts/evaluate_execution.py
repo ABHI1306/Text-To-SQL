@@ -1,6 +1,6 @@
 """Execution-accuracy runner v1: model answers vs reference queries, through the full pipeline.
 
-    docker compose exec api uv run --no-sync python scripts/evaluate_execution.py \\
+    docker compose exec api uv run --no-sync python -m scripts.evaluate_execution \\
         --project-id <uuid> --username <account> [--include-draft] [--case-prefix ecom-]
 
 Both the model's query and the reference run through the compiler under the same account, so row
@@ -80,7 +80,10 @@ def main() -> int:
         if not case_id.startswith(args.case_prefix):
             continue
         reference = references.get(case_id)
-        usable = reference and (reference["approval_status"] == "approved" or args.include_draft)
+        usable = reference and (
+            reference["approval_status"] == "approved"
+            or (args.include_draft and reference["approval_status"] == "draft")
+        )
         if usable:
             selected.append((case, reference))
         else:

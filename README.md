@@ -6,103 +6,131 @@ PostgreSQL SQL with row-level security applied, a validator checks it, and the r
 back with a step timeline, charts and a summary. Everything runs on your own machine:
 no data or prompts leave it. Only PostgreSQL is supported as a data source.
 
-## Quick start (new machine)
+- [docs/RUNBOOK.md](docs/RUNBOOK.md): deploy, re-index, rotate keys, roles, LDAP and OIDC, schedules, DBA reset
+- [docs/DEMO.md](docs/DEMO.md): a 10-minute demo script
+- [docs/PROJECT.md](docs/PROJECT.md): what is built, as built
+- [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) and [docs/EVALUATION.md](docs/EVALUATION.md): what does not work yet, and the accuracy numbers
+- [docs/DECISIONS.md](docs/DECISIONS.md): why things are the way they are; [docs/openapi.yaml](docs/openapi.yaml): the API
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  user([Browser]) --> ui[React UI<br/>host :4173]
+  ui -->|/api/v1| api[FastAPI API<br/>:8000]
+  api --> agent[Question graph<br/>LangGraph]
+  agent --> ollama[(Ollama<br/>local models)]
+  agent --> qdrant[(Qdrant<br/>model index)]
+  agent --> compiler[Semantic compiler<br/>+ row policies + validator]
+  compiler --> warehouse[(Your PostgreSQL<br/>read-only account)]
+  api --> meta[(Metadata PostgreSQL<br/>users, models, audit, jobs)]
+  worker[Worker<br/>scheduler] --> meta
+  worker --> compiler
+  ldap[OpenLDAP / Keycloak<br/>optional] -.-> api
+```
+
+The code is hexagonal: `app/ports` defines the interfaces, `app/adapters` implements them
+(Ollama, Qdrant, PostgreSQL, LDAP, OIDC), and `lint-imports` (part of `make check`) stops ports and the
+core from importing adapters. Every question runs: retrieve model context, generate logical
+SQL, compile under the asker's row policies, validate (allowlist plus `EXPLAIN`), execute
+read-only. Nothing but a compiled, validated single `SELECT` ever reaches the database.
+
+## Quick start
+
+About 15 minutes once the model weights are downloaded (the download itself depends on your
+connection; the default models are several GB).
 
 ### 1. Prerequisites
 
 | Tool | Notes |
 | --- | --- |
-| Docker with Compose (or Podman with the Docker CLI emulation) | runs PostgreSQL, Qdrant, Ollama, the API and the worker |
-| [`uv`](https://docs.astral.sh/uv/) | Python environment; only needed on the host for `make check` and the helper commands |
+| Docker with Compose v2 (or Podman with the Docker CLI emulation) | runs PostgreSQL, Qdrant, Ollama, the API and the worker |
+| `make` and `openssl` | the commands below; `openssl` generates your secrets |
 | Node.js 22+ and npm | the web UI runs on the host with Vite |
-| 16 GB RAM minimum (project document tier A: CPU only, one 7B-class model) | a GPU with 12-16 GB VRAM (tier B) is the reference; on CPU answers are slow. Leave several GB of disk for the Ollama models |
+| [`uv`](https://docs.astral.sh/uv/) | only for `make check` and local development |
+| 16 GB RAM minimum | CPU only works but is slow (tens of seconds per answer). A GPU with 12-16 GB VRAM is the reference; see *GPU* below. Leave several GB of disk for the models |
 
-Ports used on the host: 8000 (API), 4173 (UI), 6333 (Qdrant), and 55432 / 55433 (the metadata
-and demo PostgreSQL databases; change them with `METADATA_HOST_PORT` / `DEMO_HOST_PORT` in
-`.env`). Ollama runs inside Compose and is not published to the host.
+Host ports: 8000 (API), 4173 (UI), 6333 (Qdrant), 55432 and 55433 (the metadata and demo
+databases; change them with `API_HOST_PORT`, `QDRANT_HOST_PORT`, `METADATA_HOST_PORT` and
+`DEMO_HOST_PORT`; point the UI at a moved API with `VITE_API_PROXY_TARGET`). Ollama is not published.
 
-### 2. Configure `.env`
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-1. Replace every `*_change_me` password with your own.
-2. Generate the two secrets and paste them in:
-   ```bash
-   openssl rand -hex 32     # JWT_SECRET (at least 32 characters)
-   uv run -- python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"   # CONNECTION_ENCRYPTION_KEY
-   ```
-3. Set `BOOTSTRAP_DBA_PASSWORD` (at least 12 characters). It is only the temporary password
-   of the first account (`BOOTSTRAP_DBA_USERNAME`, default `demo.dba`).
-
-`.env` is ignored by git. Never commit it. Do not use the placeholder values on a shared
-machine or a network-reachable host.
-
-### 3. Start the stack
+### 2. Configure, start, pull the models
 
 ```bash
-docker compose --env-file .env up -d --build
-docker compose --env-file .env --profile tools run --rm migrate     # apply all database migrations
-make user-bootstrap-dba                                              # create the first DBA account
-curl http://localhost:8000/health                                    # should answer {"status":"ok"}
+make init-env     # creates .env with random secrets and prints the first DBA password
+make up           # builds and starts the stack, then applies the database migrations
+make models       # pulls the models named in .env (the Ollama volume starts empty)
+make bootstrap    # creates the first DBA account and clears the temporary password from .env
+curl http://localhost:8000/health/ready   # {"status":"ok", ...}
 ```
 
-After the account exists, delete `BOOTSTRAP_DBA_PASSWORD` from `.env` and recreate the API:
-`docker compose --env-file .env up -d --force-recreate api`.
-
-The Compose network is internal: containers can reach each other but not the internet.
-Create more accounts with `make user-create USERNAME=analyst` and reset one with
-`make user-reset-dba USERNAME=analyst`.
-
-### 4. Install the local models
-
-Model weights are not downloaded automatically (the Ollama volume starts empty):
-
-```bash
-docker compose --env-file .env exec ollama ollama pull llama3:latest
-docker compose --env-file .env exec ollama ollama pull nomic-embed-text:latest
-```
+`.env` is ignored by git; never commit it. Passwords for the DBA account are temporary: you
+must change it at first sign-in. The Compose network is internal, so containers cannot reach
+the internet.
 
 `SQL_MODEL` (default `llama3:latest`) writes the SQL, `EMBEDDING_MODEL` (default
-`nomic-embed-text:latest`) powers retrieval, and the optional `SMALL_MODEL` is used for the
-cheap routing steps and falls back to `SQL_MODEL` when empty. If you set other names in
-`.env`, pull those instead. Do not use a model whose name ends in `-cloud`: it sends
-inference to an external service.
+`nomic-embed-text:latest`) powers retrieval, and the optional `SMALL_MODEL` handles routing
+steps and falls back to `SQL_MODEL`. If you change them in `.env`, run `make models` again.
+Do not use a model whose name ends in `-cloud`: it sends inference to an external service.
 
-### 5. Start the UI
+### 3. Start the UI
 
 ```bash
-cd ui
-npm ci
-npm run generate:api
-npm run dev
+cd ui && npm ci && npm run generate:api && npm run dev
 ```
 
-Open <http://127.0.0.1:4173> and sign in with `BOOTSTRAP_DBA_USERNAME` and its temporary
-password; you will be asked to change it. The dev server talks to the API at
-`http://127.0.0.1:8000` (override with `VITE_API_PROXY_TARGET`). `npm run dev:mock` runs
-against labelled fixtures instead of the real API.
+Open <http://127.0.0.1:4173> and sign in as `demo.dba` with the password `make init-env`
+printed (it is also `BOOTSTRAP_DBA_PASSWORD` in `.env` until `make bootstrap` clears it).
 
-### 6. Connect a database and ask a question
+### 4. First answered question, as a DBA
 
-1. Open **Setup**, then the **PostgreSQL** card. To try the bundled sample data use host
-   `demo-db`, port `5432`, database `demo`, user `warehouse_reader` and the
-   `WAREHOUSE_READER_PASSWORD` from your `.env`.
+1. **Setup** > **PostgreSQL** card. For the bundled sample data use host `demo-db`, port `5432`,
+   database `demo`, user `warehouse_reader` and `WAREHOUSE_READER_PASSWORD` from `.env`.
 2. **Test connection**, create the project, **select tables**, define relationships, then
    **Validate and save model**.
-3. In **Connect and model** open the **Deploy report** tab and click **Deploy model**.
-4. Open **Home** and ask about the data, for example "How many customers do we have?".
+3. **Connect and model** > **Deploy report** > **Deploy model**.
+4. **Home**: ask "How many customers do we have?".
 
-You can add more databases with **+ Add project** in the project switcher at the top of the
-sidebar. One project (one database) is active at a time and every screen shows that
-project's data.
+**Shortcut without clicking through Setup** (verified on a clean clone): the API can create the
+bundled E-commerce sample project and deploy it in two calls.
 
-The demo database is seeded with e-commerce and HR sample schemas only when its volume is
-first created. If initialization fails, inspect the logs; remove the named demo volume only
-if you intentionally want to discard its contents.
+```bash
+API=http://localhost:8000/api/v1
+TOKEN=$(curl -s $API/auth/login -H 'content-type: application/json' \
+  -d '{"username":"demo.dba","password":"<your new password>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+PROJECT=$(curl -s -X POST $API/sample-projects/ecommerce -H "authorization: Bearer $TOKEN" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -X POST $API/projects/$PROJECT/deploy -H "authorization: Bearer $TOKEN"        # indexes the model
+curl -s $API/projects/$PROJECT/query -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"question":"How many customers do we have?"}'
+```
+
+The project then appears in the UI. Change the temporary password first (the UI asks you to at
+first sign-in); the first answer takes from several seconds on a GPU to about two minutes on a CPU.
+
+### 5. First answered question, as a user
+
+As the DBA, open **Users and roles**, create an account with the **User** role and give it
+access to the project (or `make user-create USERNAME=maria ROLE=User`, which asks for a temporary password and then needs the project access granted in the UI). Sign in as that
+account: the menu shows only Home and Shared with me, and answers respect row policies.
+
+### GPU
+
+The base Compose file runs the models on the CPU. With an NVIDIA GPU and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit)
+installed, add the overlay: `make up GPU=1`. Other GPUs are not configured.
+
+### Other commands
+
+| Command | What it does |
+| --- | --- |
+| `make down` / `make logs` | stop the stack / follow the api and worker logs |
+| `make user-create USERNAME=x ROLE=User` | add a local account |
+| `make up IDENTITY=1` | also start OpenLDAP and Keycloak (see the runbook for the secrets they need) |
+| `make check` | ruff, mypy, import-linter and the Python tests |
+| `make e2e` | Playwright tests against the UI mock API |
+| `make offline` | the whole stack with outbound traffic blocked |
+| `make eval PROJECT_ID=... USERNAME=...` | execution accuracy on the golden set, then the accuracy gate |
 
 ## External PostgreSQL sample databases
 
@@ -138,7 +166,7 @@ API container, not from your machine:
   container name as the host, for example:
   ```bash
   docker run -d --name my-pg --network texttosql_local \
-    -e POSTGRES_PASSWORD=admin_pw -e POSTGRES_DB=mydb postgres:16
+    -e POSTGRES_PASSWORD=admin_pw -e POSTGRES_DB=mydb docker.io/library/postgres:16
   ```
   (`docker network ls` shows the exact network name on your machine.)
 - Add the host to `DB_HOST_ALLOWLIST` in `.env` (comma separated, no spaces; a name, an IP
@@ -167,7 +195,7 @@ API container, not from your machine:
 | The API refuses to start (secrets) | `JWT_SECRET` (32+ characters) or `CONNECTION_ENCRYPTION_KEY` (a Fernet key) is missing or invalid. |
 | Questions fail with "LLM unavailable" | The Ollama models are not pulled yet, or `SQL_MODEL` / `EMBEDDING_MODEL` name a model you did not pull. |
 | Home answers "No relevant models" or never returns rows | The model was saved but not deployed. Deploy it from **Connect and model**. |
-| The API container shows `unhealthy` right after start | It is still starting; check `docker compose logs api` and `curl localhost:8000/health`. |
+| The API container shows `unhealthy` | The healthcheck calls `/health`; check `docker compose logs api` and `curl localhost:8000/health/ready` (it names the dependency that is down). Compose files before v0.1.0 used a healthcheck that Podman split at spaces and always failed. |
 | Port already in use | Another service holds 8000, 4173, 6333, 55432 or 55433. Stop it or change the port. |
 | Using Podman | The Docker CLI emulation works, but commands may print an emulation notice. Create `/etc/containers/nodocker` to silence it. |
 
@@ -197,155 +225,29 @@ running, the Day 1 outbound-connectivity check is:
 ./scripts/test-egress.sh
 ```
 
-## UI
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+| --- | --- |
+| "Database host is not in DB_HOST_ALLOWLIST" | The host is missing from `DB_HOST_ALLOWLIST`, or the API was not recreated after editing `.env`. A `DB_HOST_ALLOWLIST` exported in your shell overrides `.env`: run `unset DB_HOST_ALLOWLIST`, recreate the API, then check with the `env \| grep` command above. |
+| "Could not read database catalog" in Setup | The connected database is unreachable. Check that its container is running (`docker ps -a`), is on the Compose network, and that the host, port and read-only password are right. Containers do not restart on their own after a reboot unless created with `--restart unless-stopped`. |
+| Connection test fails with a name error | The host is not resolvable from the API container. Use the container name on the Compose network, not `localhost`. |
+| `docker compose` complains about `METADATA_ADMIN_PASSWORD` or similar | `.env` is missing or a required password is unset. Copy `.env.example` and fill it in. |
+| The API refuses to start (secrets) | `JWT_SECRET` (32+ characters) or `CONNECTION_ENCRYPTION_KEY` (a Fernet key) is missing or invalid. |
+| Questions fail with "LLM unavailable" | The Ollama models are not pulled yet, or `SQL_MODEL` / `EMBEDDING_MODEL` name a model you did not pull. |
+| Home answers "No relevant models" or never returns rows | The model was saved but not deployed. Deploy it from **Connect and model**. |
+| The API container shows `unhealthy` | The healthcheck calls `/health`; check `docker compose logs api` and `curl localhost:8000/health/ready` (it names the dependency that is down). Compose files before v0.1.0 used a healthcheck that Podman split at spaces and always failed. |
+| Port already in use | Another service holds 8000, 4173, 6333, 55432 or 55433. Stop it or change the port. |
+| Using Podman | The Docker CLI emulation works, but commands may print an emulation notice. Create `/etc/containers/nodocker` to silence it. |
+
+## Checks
 
 ```bash
-cd ui
-npm run generate:api
-npm run dev
+make check
+cd ui && npm ci && npm run generate:api && npm run test && npm run build && npm run test:e2e
+docker compose --env-file .env --profile test run --rm tests   # live database and permission tests
+make offline                                                   # needs OIDC_CLIENT_SECRET and KEYCLOAK_ADMIN_PASSWORD
 ```
 
-To use the mock account and fixtures instead, run:
-
-```bash
-npm run dev:mock
-```
-
-Open <http://127.0.0.1:4173>. The Vite dev server defaults to the real local API at
-`http://127.0.0.1:8000`; set `VITE_API_PROXY_TARGET` to override it. The mock account,
-database catalog, and model descriptions are fixtures, not real authentication or
-database access. The OpenAPI contract is in `docs/openapi.yaml`.
-
-## Day 1 model smoke check
-
-With a local Ollama server and model installed, run:
-
-```bash
-uv run -- python scripts/model_bakeoff.py --models llama3:latest --limit 10
-```
-
-Results are written to `reports/day1-model-smoke.json`. This is a prompt/schema smoke
-test only; execution accuracy cannot be measured until the semantic compiler and
-validator are implemented. Current status and limitations are recorded in
-`docs/DECISIONS.md`.
-
-## Current Day 1 scope
-
-Implemented foundations include the seven ports, a PostgreSQL read-only adapter,
-metadata migration, local demo seed data, `/health`, a UI shell using a mock API,
-OpenAPI-generated TypeScript types, and CI checks. The target demo machine has been
-accepted as Tier A-class, below the plan's Tier B reference. The second-reviewer
-checkpoint remains open. The schema smoke results do not by themselves justify a final
-model selection; see
-`docs/DECISIONS.md` and the dated reports in `reports/`. Execution accuracy is a later
-evaluation gate and requires the compiler path and golden set.
-
-## Day 2 progress
-
-The semantic-model domain, read-only catalog profiling, encrypted project connection
-storage, setup APIs, and local authentication are implemented. The UI includes
-first-login/password-change flows and a setup wizard to test a connection, select and
-profile tables, and validate/save an editable MDL. Refresh tokens are rotated in an
-HttpOnly cookie; access tokens remain in browser memory. Profiling samples redact
-common sensitive columns. Local Ollama description generation still needs to be run
-against an installed model, and the DBA should review/correct descriptions for five
-important tables before Day 2 is marked complete.
-
-## Day 3 progress
-
-Implemented locally: MDL chunking and version-scoped vector indexing; Ollama embeddings;
-Qdrant project/version filters; hybrid retrieval with relationship expansion and column
-pruning; a deployment endpoint that indexes before atomically switching the active MDL;
-custom-role, user, project-access, and user-attribute APIs; User system-role migration;
-sample E-commerce and HR project templates; and a distinct React Flow Connect and model
-canvas that saves MDL layout positions. The Home screen now sends questions through
-retrieval, local SQL generation, SQL safety validation, and the project's read-only
-PostgreSQL connection; it displays returned columns and rows, generated SQL, and result
-provenance rather than invented answers. Qdrant and Ollama are local services; install
-the needed models explicitly as described above.
-
-Also added since: route-walk and generated 403 tests plus a DBA/User/custom-role matrix
-(`tests/test_route_permissions.py`); sample-project endpoint tests; a draft compile test
-set (`tests/data/compile_cases.json`); a golden-set bake-off script
-(`scripts/golden_bakeoff.py`, results in `reports/`); the four-group sidebar, a mobile
-bottom bar and Playwright coverage for the canvas. `GET /projects/{id}/mdl` now requires
-`edit_mdl`, and DBAs can reach every project.
-
-Day 3 is not fully signed off. The 40 reference-query cases still need DBA approval or
-rejection, the retrieval recall target has not been measured against an approved set,
-and model/embedding bake-off results are not claimed. Deployment and retrieval tests
-cover the local adapter contracts; live Qdrant/PostgreSQL failure and permission tests
-still need to be run in the Compose test environment. Day 2's five-table description
-review also remains open until the code is pushed to the selected remote repository.
-
-The candidate cases and recall runner are at `tests/data/retrieval_golden.json` and
-`scripts/evaluate_retrieval.py`. After DBA review, set each accepted case's
-`approval_status` to `approved` and add its reviewed reference SQL before using the
-dataset as a baseline. Then run
-`uv run -- python scripts/evaluate_retrieval.py --project-id <project-uuid> --k 5`.
-Until approved cases exist, the runner reports `not_measurable`; it does not fabricate
-a recall score or claim SQL compilation accuracy.
-
-## Day 4 progress
-
-Implemented locally: the semantic compiler (`app/semantic/compiler.py`) with model CTEs,
-calculated fields, relationship-checked joins, metric expansion, bound-parameter row
-policies and typed errors; a 40-case compile test set that also runs against PostgreSQL;
-DDL-style prompt context (`app/semantic/prompt_context.py`); `POST /projects/{id}/compile-preview`
-(draft MDL, preview as a user, optional 10-row sample); row-policy storage, save-time
-validation and admin API (`/projects/{id}/row-policies`); an audit service and
-`GET /audit` browser with filters and paging; migration `0004_day4`. Apply it with
-`docker compose --env-file .env --profile tools run --rm migrate` before using the new endpoints.
-
-Also: the Connect and model screen now has a canvas with drag-to-relate, a side panel for
-descriptions, keys and calculated fields with live compiler checks, a metrics editor that
-previews compiled SQL and a sample result, and a deploy report tab
-(`GET /projects/{id}/deploy-report`). Row policies and Audit screens are still placeholders.
-
-Not done: the human checkpoint (3 test users, policy approval, DBA review of the compile
-cases), and routing questions through the compiler (Day 5). See `docs/DECISIONS.md` for the
-choices and their limits.
-
-## Day 5 progress
-
-Questions now run through one graph (`app/agent/graph.py`): retrieve, generate logical SQL,
-compile under the asker's row policies, validate (allowlist plus an `EXPLAIN` dry run), execute,
-with up to three typed corrections. `POST /projects/{id}/query` returns rows (logical SQL for
-everyone, compiled SQL only with `rerun_sql`); `POST /projects/{id}/query/stream` streams the
-steps as server-sent events, and the Home screen renders them as a timeline with the results
-table, a SQL viewer, bar/line charts, retry and clarification quick replies.
-
-From the command line (inside the api container):
-
-    docker compose exec api uv run --no-sync python -m app.cli.ask \
-        --project-id <uuid> --username <account> --show-compiled --events "How many orders per status?"
-
-Safety suites: `tests/test_redteam.py` (30 cases) and `tests/test_rls_suite.py` (3 users x 39
-shapes, against PostgreSQL; needs `WAREHOUSE_DSN`). LDAP login is wired into `/auth/login` when
-`LDAP_URI` is set (see `.env.example`); groups map to roles through `PUT /identity/mappings`.
-To try it with the OpenLDAP demo container:
-
-    sh scripts/ldap/make-certs.sh
-    docker compose -f docker-compose.yml -f docker-compose.ldap.yml --profile identity-demo up -d
-
-Apply migration `0005_day5` first (`docker compose --env-file .env --profile tools run --rm migrate`).
-Execution accuracy runner: `scripts/evaluate_execution.py`; the baseline and its caveats are in
-`docs/DECISIONS.md` and `reports/`. Day 5 is not signed off: the references behind the baseline
-are unapproved drafts, and the compiler/validator line-by-line review and the hostile-query
-session are still open.
-
-OpenID Connect login (Day 6) is enabled by `OIDC_ISSUER` (see `.env.example`): `GET
-/api/v1/auth/oidc/login` redirects to the provider (authorization code + PKCE) and
-`GET /api/v1/auth/oidc/callback` returns the same session as `/auth/login`. Map provider groups
-to roles with `PUT /identity/mappings` using `"source": "oidc"`. To try it with Keycloak:
-
-    # set OIDC_CLIENT_SECRET and KEYCLOAK_ADMIN_PASSWORD in .env, apply migration 0006_day6
-    docker compose -f docker-compose.yml -f docker-compose.oidc.yml --profile identity-demo up -d
-    # then open http://localhost:8000/api/v1/auth/oidc/login (demo users: scripts/oidc/realm-text2sql.json)
-    OIDC_TEST_ISSUER=http://localhost:8081/realms/text2sql OIDC_TEST_CLIENT_SECRET=... uv run pytest tests/test_oidc_live.py
-
-The `worker` service runs scheduled profiling and drift detection. Set a schedule with
-`PUT /api/v1/projects/{id}/profiling-schedule` (cron, at most every 15 minutes; the job runs as
-the person who set it), read results at `GET /api/v1/projects/{id}/drift-reports`, and turn a
-report into a draft MDL revision with `POST .../drift-reports/{reportId}/draft`. Migration
-`0006_day6` (the single Day 6 migration) also adds the job, lease, drift-report and OIDC-state tables.
+`npm run dev:mock` runs the UI against labelled fixtures instead of the real API; the mock
+account and data are not real authentication or database access.

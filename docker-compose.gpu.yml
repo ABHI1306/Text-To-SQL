@@ -1,0 +1,13 @@
+# NVIDIA GPU for the local model server. Needs the NVIDIA Container Toolkit on the host
+# (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit). Use it with:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# or `make up GPU=1`. Without a GPU the base file runs the models on the CPU.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,4 +1,4 @@
-FROM python:3.13-slim AS base
+FROM docker.io/library/python:3.13.16-slim AS base
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.15 /uv /uvx /bin/
 
