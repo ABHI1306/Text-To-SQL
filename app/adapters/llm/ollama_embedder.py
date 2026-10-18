@@ -1,3 +1,5 @@
+"""Ollama adapter that turns texts into embedding vectors."""
+
 from collections.abc import Sequence
 
 import httpx
@@ -6,6 +8,7 @@ from app.ports.embedder import EmbedderPort
 
 
 class OllamaEmbedderAdapter(EmbedderPort):
+    """Embeds texts with the local Ollama ``/api/embed`` endpoint."""
     def __init__(
         self,
         base_url: str,
@@ -13,6 +16,7 @@ class OllamaEmbedderAdapter(EmbedderPort):
         *,
         timeout_seconds: float = 120,
     ) -> None:
+        """Validate and store the Ollama URL, embedding model and timeout."""
         if not base_url:
             raise ValueError("OLLAMA_URL is required")
         if not model:
@@ -22,6 +26,7 @@ class OllamaEmbedderAdapter(EmbedderPort):
         self._timeout = timeout_seconds
 
     def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        """Embed ``texts``, checking count, numeric values and consistent dimensions."""
         if not texts:
             return []
         try:

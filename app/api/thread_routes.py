@@ -56,6 +56,7 @@ MAX_ROWS_CEILING = 10_000
 
 
 class ThreadAskRequest(BaseModel):
+    """Body for asking in a thread: question, row cap and optional preview user."""
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
@@ -64,6 +65,7 @@ class ThreadAskRequest(BaseModel):
 
 
 class RerunRequest(BaseModel):
+    """Body for rerunning edited logical SQL with a row cap."""
     model_config = ConfigDict(extra="forbid")
 
     logical_sql: str = Field(min_length=1, max_length=20_000)
@@ -71,12 +73,14 @@ class RerunRequest(BaseModel):
 
 
 class MessageFeedbackRequest(BaseModel):
+    """Body for a thumbs up or down rating on one answer."""
     model_config = ConfigDict(extra="forbid")
 
     rating: Literal["up", "down"]
 
 
 def _sse(event: AskEvent) -> str:
+    """Format one agent event as a server-sent-events frame."""
     return f"event: {event.type}\ndata: {json.dumps(event.data, default=str)}\n\n"
 
 
@@ -115,6 +119,7 @@ def create_thread(
     threads: ThreadsDependency,
     audit: AuditDependency,
 ) -> dict[str, str]:
+    """Start an empty conversation in the project (requires ``ask_question``)."""
     require_project_access(context, project_id)
     thread_id = str(uuid.uuid4())
     threads.create(thread_id, str(project_id), context.user_id)
@@ -147,6 +152,10 @@ def get_thread(
     threads: ThreadsDependency,
     store: Annotated[PostgresCollabStore, Depends(get_collab_store)],
 ) -> dict[str, Any]:
+    """Read a thread's messages if owned, shared with the caller or visible to all.
+
+    Non-owners get questions and logical SQL only, never answers, summaries or charts.
+    """
     record = threads.get(str(thread_id))
     if record is None or not can_read_thread(
         context,
@@ -219,6 +228,7 @@ def ask_in_thread(
     policies = [p.policy for p in governance.list_policies(str(project_id), enabled_only=True)]
 
     def events() -> Iterator[str]:
+        """Yield SSE frames for the question, always closing the service; fail closed on error."""
         try:
             for event in prepared.service.stream(
                 str(project_id),

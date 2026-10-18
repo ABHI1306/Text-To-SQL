@@ -10,6 +10,7 @@ from app.core.types import JsonValue
 
 
 def json_value(value: object) -> JsonValue:
+    """Return ``value`` as JSON-safe: ISO dates, decimals as text, bytes as hex, else ``str``."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, (date, datetime)):

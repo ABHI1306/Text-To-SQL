@@ -1,3 +1,5 @@
+"""Qdrant vector-store adapter; every point and query is scoped by project and model version."""
+
 from collections.abc import Mapping, Sequence
 from typing import cast
 from urllib.parse import quote
@@ -9,6 +11,7 @@ from app.ports.vector_store import VectorStorePort
 
 
 class QdrantVectorStoreAdapter(VectorStorePort):
+    """Stores and searches embeddings in one Qdrant collection over HTTP."""
     def __init__(
         self,
         base_url: str,
@@ -16,6 +19,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         collection: str = "text2sql",
         timeout_seconds: float = 30,
     ) -> None:
+        """Validate settings and open an HTTP client for the collection."""
         if not base_url:
             raise ValueError("QDRANT_URL is required")
         if not collection:
@@ -26,6 +30,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         self._client = httpx.Client(base_url=self._base_url, timeout=self._timeout)
 
     def ensure_collection(self, vector_size: int) -> None:
+        """Create the cosine collection, or check an existing one has the same dimension."""
         if vector_size < 1:
             raise ValueError("Vector size must be positive")
         response = self._client.get(f"/collections/{self._collection}")
@@ -55,6 +60,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         model_version: str,
         records: Sequence[VectorRecord],
     ) -> None:
+        """Write points tagged with ``project_id`` and ``model_version`` in their payload."""
         if not records:
             return
         payload = []
@@ -85,6 +91,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         *,
         limit: int,
     ) -> list[VectorMatch]:
+        """Nearest-neighbour search filtered to one project and model version."""
         if limit < 1:
             raise ValueError("Search limit must be positive")
         response = self._client.post(
@@ -119,6 +126,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         return matches
 
     def delete_version(self, project_id: str, model_version: str) -> None:
+        """Delete all points of a project's model version (a missing collection is fine)."""
         response = self._client.post(
             f"/collections/{self._collection}/points/delete",
             params={"wait": "true"},
@@ -138,6 +146,7 @@ class QdrantVectorStoreAdapter(VectorStorePort):
     def delete_records(
         self, project_id: str, model_version: str, record_ids: Sequence[str]
     ) -> None:
+        """Delete the given point ids, scoped to the project and model version."""
         if not record_ids:
             return
         response = self._client.post(
@@ -158,10 +167,12 @@ class QdrantVectorStoreAdapter(VectorStorePort):
         self._raise_for_status(response)
 
     def close(self) -> None:
+        """Close the HTTP client."""
         self._client.close()
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
+        """Turn an HTTP error into a ``RuntimeError`` without leaking the body."""
         try:
             response.raise_for_status()
         except httpx.HTTPError as error:

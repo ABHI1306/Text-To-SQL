@@ -25,6 +25,7 @@ FindingKind = Literal["column_added", "column_removed", "type_changed", "table_r
 
 @dataclass(frozen=True)
 class DriftFinding:
+    """One difference between a mapped table or column and the live catalog."""
     kind: FindingKind
     table: str  # schema.table, as in the MDL's tableReference
     model: str
@@ -34,6 +35,7 @@ class DriftFinding:
     is_primary_key: bool = False
 
     def as_json(self) -> dict[str, object]:
+        """JSON form of the finding, omitting unset fields."""
         data: dict[str, object] = {"kind": self.kind, "table": self.table, "model": self.model}
         for key in ("column", "expected", "actual"):
             value = getattr(self, key)
@@ -45,11 +47,13 @@ class DriftFinding:
 
     @staticmethod
     def from_json(data: Mapping[str, object]) -> DriftFinding:
+        """Rebuild a finding from its JSON form, rejecting unknown kinds."""
         kind = str(data["kind"])
         if kind not in ("column_added", "column_removed", "type_changed", "table_removed"):
             raise ValueError(f"Unknown drift finding {kind!r}")
 
         def text(key: str) -> str | None:
+            """Value of ``key`` as a string, or None when absent."""
             value = data.get(key)
             return str(value) if value is not None else None
 
@@ -66,14 +70,17 @@ class DriftFinding:
 
 @dataclass(frozen=True)
 class DriftResult:
+    """All drift findings of one comparison."""
     findings: tuple[DriftFinding, ...]
 
     @property
     def has_drift(self) -> bool:
+        """True when any finding exists."""
         return bool(self.findings)
 
     @property
     def summary(self) -> dict[str, int]:
+        """Finding counts per kind, with zeros for kinds that did not occur."""
         counts = Counter(finding.kind for finding in self.findings)
         return {
             kind: counts.get(kind, 0)
@@ -175,5 +182,6 @@ def apply_drift(mdl: Mdl, findings: tuple[DriftFinding, ...]) -> Mdl:
 
 
 def _first_line(error: Exception) -> str:
+    """Short readable detail of a validation error, skipping the generic header line."""
     lines = [line.strip() for line in str(error).splitlines() if line.strip()]
     return " ".join(lines[1:3]) if len(lines) > 1 else (lines[0] if lines else "invalid model")

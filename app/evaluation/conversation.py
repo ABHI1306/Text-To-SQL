@@ -22,6 +22,7 @@ INTENTS = ("data_question", "clarify", "respond")
 
 @dataclass(frozen=True)
 class IntentCase:
+    """One labelled message and the intent it should be routed to."""
     id: str
     message: str
     intent: str
@@ -29,6 +30,7 @@ class IntentCase:
 
 @dataclass(frozen=True)
 class ChainTurn:
+    """One turn of a follow-up chain with its expected intent and rewrite checks."""
     message: str
     intent: str
     kind: str
@@ -39,12 +41,14 @@ class ChainTurn:
 
 @dataclass(frozen=True)
 class Chain:
+    """An ordered conversation of turns evaluated together."""
     id: str
     turns: tuple[ChainTurn, ...]
 
 
 @dataclass(frozen=True)
 class IntentReport:
+    """Intent routing results: totals, a confusion matrix and the misses."""
     total: int
     correct: int
     confusion: dict[str, dict[str, int]]
@@ -52,11 +56,13 @@ class IntentReport:
 
     @property
     def accuracy(self) -> float:
+        """Share of cases routed correctly (0.0 when there are none)."""
         return self.correct / self.total if self.total else 0.0
 
 
 @dataclass(frozen=True)
 class ChainReport:
+    """Follow-up chain results: intent and rewrite hit counts and the misses."""
     turns: int
     intent_correct: int
     rewrites_scored: int
@@ -65,14 +71,17 @@ class ChainReport:
 
     @property
     def intent_accuracy(self) -> float:
+        """Share of turns routed to the expected intent (0.0 when there are none)."""
         return self.intent_correct / self.turns if self.turns else 0.0
 
     @property
     def rewrite_accuracy(self) -> float:
+        """Share of rewritten follow-ups judged faithful (0.0 when none scored)."""
         return self.rewrites_correct / self.rewrites_scored if self.rewrites_scored else 0.0
 
 
 def load_intent_cases(path: Path = INTENT_SET) -> list[IntentCase]:
+    """Load the labelled intent cases from JSON, rejecting unknown intent labels."""
     document = json.loads(path.read_text(encoding="utf-8"))
     cases = [IntentCase(c["id"], c["message"], c["intent"]) for c in document["cases"]]
     if any(case.intent not in INTENTS for case in cases):
@@ -81,6 +90,7 @@ def load_intent_cases(path: Path = INTENT_SET) -> list[IntentCase]:
 
 
 def load_chains(path: Path = CHAIN_SET) -> list[Chain]:
+    """Load the follow-up conversation chains from JSON."""
     document = json.loads(path.read_text(encoding="utf-8"))
     return [
         Chain(
@@ -100,6 +110,7 @@ def load_chains(path: Path = CHAIN_SET) -> list[Chain]:
 def evaluate_intents(
     llm: LLMPort, cases: Sequence[IntentCase], model_names: Sequence[str]
 ) -> IntentReport:
+    """Route every case's message and tally a confusion matrix; model errors count as misses."""
     confusion: dict[str, Counter[str]] = {name: Counter() for name in INTENTS}
     failures: list[str] = []
     correct = 0
@@ -119,6 +130,7 @@ def evaluate_intents(
 
 
 def rewrite_is_faithful(turn: ChainTurn, standalone: str) -> bool:
+    """Whether a rewrite has every required word and none of the forbidden ones."""
     text = standalone.casefold()
     return all(w.casefold() in text for w in turn.must_contain) and not any(
         w.casefold() in text for w in turn.must_not_contain
@@ -128,6 +140,7 @@ def rewrite_is_faithful(turn: ChainTurn, standalone: str) -> bool:
 def evaluate_chains(
     llm: LLMPort, chains: Sequence[Chain], model_names: Sequence[str]
 ) -> ChainReport:
+    """Replay each chain (rewrite then route per turn) and score intents and rewrites."""
     turns = intent_correct = scored = rewrites_correct = 0
     failures: list[str] = []
     for chain in chains:

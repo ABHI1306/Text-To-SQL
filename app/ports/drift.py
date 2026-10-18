@@ -1,3 +1,5 @@
+"""Port for storing schema-drift reports and the draft models made from them."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +9,7 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class StoredDriftReport:
+    """A persisted drift report: findings against one MDL version and any resulting draft."""
     id: str
     project_id: str
     mdl_version: int
@@ -20,6 +23,7 @@ class StoredDriftReport:
 
 
 class DriftRepoPort(Protocol):
+    """Storage for drift reports, scoped to a project."""
     def save_report(
         self,
         *,
@@ -37,9 +41,13 @@ class DriftRepoPort(Protocol):
 
     def list_reports(
         self, project_id: str, *, limit: int, before: datetime | None = None
-    ) -> list[StoredDriftReport]: ...
+    ) -> list[StoredDriftReport]:
+        """Return up to ``limit`` reports, newest first, created before ``before`` when given."""
+        ...
 
-    def get_report(self, project_id: str, report_id: str) -> StoredDriftReport | None: ...
+    def get_report(self, project_id: str, report_id: str) -> StoredDriftReport | None:
+        """Return the report of this project, or None when missing or in another project."""
+        ...
 
     def create_draft(
         self,

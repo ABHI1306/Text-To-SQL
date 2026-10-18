@@ -39,6 +39,7 @@ def get_eval_service(
     governance: Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)],
     audit: AuditDependency,
 ) -> EvalService:
+    """Build the ``EvalService`` wired to the project's backend factory."""
     return EvalService(store, backend_factory(repository, governance, get_settings()), audit)
 
 
@@ -67,6 +68,7 @@ def get_eval(
     service: EvalDependency,
     format: Annotated[Literal["json", "markdown"], Query()] = "json",
 ) -> Response | dict[str, Any]:
+    """Return an evaluation report as JSON or Markdown for a run in the caller's projects."""
     report = service.report(str(run_id))
     if report is None or str(report["run"]["project_id"]) not in context.project_ids:
         raise HTTPException(status_code=404, detail="Evaluation run not found")

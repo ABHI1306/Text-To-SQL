@@ -1,9 +1,12 @@
+"""Structured JSON logging setup shared by the API and the worker."""
+
 import logging
 
 import structlog
 
 
 def configure_logging(log_level: str = "INFO") -> None:
+    """Set the log level and configure ``structlog`` to emit ISO-timestamped JSON lines."""
     logging.basicConfig(
         format="%(message)s",
         level=getattr(logging, log_level.upper(), logging.INFO),

@@ -1,3 +1,5 @@
+"""Index a semantic model into the vector store and deploy it as the active version."""
+
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +17,11 @@ _RECORD_NAMESPACE = uuid.UUID("60b78015-f8dc-4ec9-b840-1a4ecbfe8ce1")
 
 
 class DeploymentRepository(Protocol):
-    def get_active_mdl_version(self, project_id: str) -> int | None: ...
+    """Metadata store operations that mark an MDL version active or restore the previous one."""
+
+    def get_active_mdl_version(self, project_id: str) -> int | None:
+        """Currently active MDL version of the project, or None."""
+        ...
 
     def activate_mdl_version(
         self,
@@ -24,21 +30,27 @@ class DeploymentRepository(Protocol):
         *,
         deployed_by: str,
         expected_previous_version: int | None,
-    ) -> None: ...
+    ) -> None:
+        """Make ``version`` active if ``expected_previous_version`` is still active."""
+        ...
 
     def restore_active_mdl_version(
         self, project_id: str, new_version: int, previous_version: int
-    ) -> None: ...
+    ) -> None:
+        """Roll the active version back from ``new_version`` to ``previous_version``."""
+        ...
 
 
 @dataclass(frozen=True)
 class MdlChunk:
+    """One embeddable piece of the MDL: a stable id, its text and a search payload."""
     record_id: str
     text: str
     payload: dict[str, JsonValue]
 
 
 def chunk_mdl(mdl: Mdl) -> list[MdlChunk]:
+    """Split the MDL into model, column and relationship chunks for embedding."""
     chunks: list[MdlChunk] = []
     for model in mdl.models:
         model_chunk = _model_chunk(model)
@@ -60,6 +72,7 @@ def chunk_mdl(mdl: Mdl) -> list[MdlChunk]:
 
 
 def _model_chunk(model: MdlModel) -> MdlChunk:
+    """Chunk describing a whole model: table, description and column list."""
     column_text = "; ".join(
         f"{column.name} ({column.type}){', primary key' if column.is_primary_key else ''}"
         for column in model.columns
@@ -80,6 +93,7 @@ def _model_chunk(model: MdlModel) -> MdlChunk:
 
 
 def _column_chunk(model: MdlModel, column: MdlColumn) -> MdlChunk:
+    """Chunk describing one column of ``model``."""
     return _make_chunk(
         {
             "kind": "column",
@@ -97,6 +111,7 @@ def _column_chunk(model: MdlModel, column: MdlColumn) -> MdlChunk:
 
 
 def _make_chunk(payload: dict[str, JsonValue]) -> MdlChunk:
+    """Wrap ``payload`` in a chunk whose id is a content hash of its text."""
     text = str(payload["text"]).strip()
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     identifier = str(uuid.uuid5(_RECORD_NAMESPACE, digest))
@@ -104,6 +119,7 @@ def _make_chunk(payload: dict[str, JsonValue]) -> MdlChunk:
 
 
 class IndexingService:
+    """Embeds MDL chunks in batches and stores them under a project and version."""
     def __init__(
         self,
         embedder: EmbedderPort,
@@ -111,6 +127,7 @@ class IndexingService:
         *,
         batch_size: int = 32,
     ) -> None:
+        """Set the embedder, vector store and a positive batch size."""
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
         self._embedder = embedder
@@ -118,6 +135,7 @@ class IndexingService:
         self._batch_size = batch_size
 
     def index(self, project_id: str, model_version: str, mdl: Mdl) -> int:
+        """Embed and upsert every chunk; on any failure delete the partial version and re-raise."""
         chunks = chunk_mdl(mdl)
         if not chunks:
             raise ValueError("Cannot index an empty semantic model")
@@ -149,20 +167,24 @@ class IndexingService:
 
 
 def _json_payload(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Copy ``payload`` through JSON so it holds only JSON-safe values."""
     return cast(dict[str, JsonValue], json.loads(json.dumps(payload)))
 
 
 def _scoped_record_id(project_id: str, model_version: str, chunk_id: str) -> str:
+    """Vector record id unique to a project, model version and chunk."""
     return str(uuid.uuid5(_RECORD_NAMESPACE, f"{project_id}:{model_version}:{chunk_id}"))
 
 
 class DeployService:
+    """Indexes a new MDL version, activates it and removes the superseded index."""
     def __init__(
         self,
         indexing: IndexingService,
         vector_store: VectorStorePort,
         metadata_repository: DeploymentRepository,
     ) -> None:
+        """Set the indexing service, vector store and deployment metadata store."""
         self._indexing = indexing
         self._vector_store = vector_store
         self._metadata_repository = metadata_repository
@@ -175,6 +197,7 @@ class DeployService:
         *,
         deployed_by: str,
     ) -> dict[str, object]:
+        """Index and activate ``version``, undoing partial work if a later step fails."""
         version_id = str(version)
         previous = self._metadata_repository.get_active_mdl_version(project_id)
         previous_version = str(previous) if previous is not None else None

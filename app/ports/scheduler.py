@@ -1,3 +1,5 @@
+"""Port and value types for scheduled jobs and their per-slot leases."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -11,6 +13,8 @@ JOB_KIND_SAVED_QUESTION = "saved_question"
 
 @dataclass(frozen=True)
 class ScheduledJob:
+    """A scheduled job: cron expression, timezone, status and next/last run times."""
+
     id: str
     project_id: str
     owner_id: str | None  # None once the owning account has been deleted
@@ -68,13 +72,21 @@ class JobStorePort(Protocol):
         status: str,
         result: Mapping[str, object] | None,
         error: str | None,
-    ) -> None: ...
+    ) -> None:
+        """Record the outcome of a claimed slot; only the worker holding the lease may finish it."""
+        ...
 
-    def pause(self, job_id: str, reason: str) -> None: ...
+    def pause(self, job_id: str, reason: str) -> None:
+        """Pause the job and store ``reason``."""
+        ...
 
-    def get(self, job_id: str) -> ScheduledJob | None: ...
+    def get(self, job_id: str) -> ScheduledJob | None:
+        """Return the job, or None when it does not exist."""
+        ...
 
-    def get_for_project(self, project_id: str, kind: str) -> ScheduledJob | None: ...
+    def get_for_project(self, project_id: str, kind: str) -> ScheduledJob | None:
+        """Return the project's job of this kind, or None."""
+        ...
 
     def upsert_for_project(
         self,
@@ -88,7 +100,9 @@ class JobStorePort(Protocol):
         """Create or replace the project's job of this kind: active, owned by ``owner_id``."""
         ...
 
-    def delete_for_project(self, project_id: str, kind: str) -> bool: ...
+    def delete_for_project(self, project_id: str, kind: str) -> bool:
+        """Delete the project's job of this kind; True when one was removed."""
+        ...
 
     def create_job(
         self,
@@ -105,7 +119,9 @@ class JobStorePort(Protocol):
 
     def list_jobs(
         self, kind: str, *, owner_id: str | None = None, project_id: str | None = None
-    ) -> list[ScheduledJob]: ...
+    ) -> list[ScheduledJob]:
+        """List jobs of ``kind``, optionally only one owner's or one project's."""
+        ...
 
     def update_job(
         self, job_id: str, schedule: str, timezone: str, next_run_at: datetime
@@ -113,9 +129,13 @@ class JobStorePort(Protocol):
         """New schedule and next slot; the job becomes active again."""
         ...
 
-    def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None: ...
+    def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None:
+        """Make a paused job active with ``next_run_at`` as its next slot; None when missing."""
+        ...
 
-    def delete_job(self, job_id: str) -> bool: ...
+    def delete_job(self, job_id: str) -> bool:
+        """Delete the job; True when one was removed."""
+        ...
 
     def health(self, now: datetime, *, grace_seconds: int) -> Mapping[str, object]:
         """Counts for the operations view: jobs by status, overdue, running and stale leases."""

@@ -37,7 +37,7 @@ MIN_PAIR_SCORE = 0.4
 
 
 class KnowledgeNotFound(LookupError):
-    pass
+    """The instruction, pair or proposal does not exist in this project."""
 
 
 class KnowledgeConflict(Exception):
@@ -48,6 +48,7 @@ class PairRejected(Exception):
     """The pair's SQL does not compile against the deployed semantic model."""
 
     def __init__(self, messages: Sequence[str]) -> None:
+        """Join the compile error messages into the text and keep them as a tuple."""
         super().__init__("; ".join(messages))
         self.messages = tuple(messages)
 
@@ -60,9 +61,11 @@ def check_pair_sql(logical_sql: str, mdl: Mdl) -> None:
 
 
 class KnowledgeService:
+    """Manages instructions and SQL pairs, keeping the vector index in step with the repository."""
     def __init__(
         self, repo: KnowledgeRepoPort, embedder: EmbedderPort, vector_store: VectorStorePort
     ) -> None:
+        """Store the repository, embedder and vector store."""
         self._repo = repo
         self._embedder = embedder
         self._store = vector_store
@@ -70,6 +73,7 @@ class KnowledgeService:
     # ------------------------------------------------------------------ lookup
 
     def lookup(self, project_id: str, vector: Sequence[float]) -> KnowledgeContext:
+        """The approved pairs and active instructions closest to the question vector."""
         return KnowledgeContext(
             pairs=self._nearest_pairs(project_id, vector, PAIR_LIMIT),
             instructions=self._instructions(project_id, vector),
@@ -78,12 +82,14 @@ class KnowledgeService:
     def _nearest_pairs(
         self, project_id: str, vector: Sequence[float], limit: int
     ) -> tuple[SqlPair, ...]:
+        """Approved pairs near the vector, re-read from the repository and cut to ``limit``."""
         matches = self._store.search(project_id, PAIRS_NAMESPACE, vector, limit=limit * 3)
         ids = [m.record_id for m in matches if m.score >= MIN_PAIR_SCORE]
         found = {p.id: p for p in self._repo.get_pairs(project_id, ids, status="approved")}
         return tuple(found[i] for i in ids if i in found)[:limit]
 
     def _instructions(self, project_id: str, vector: Sequence[float]) -> tuple[Instruction, ...]:
+        """All active instructions, or the best-scoring few when there are more than the limit."""
         active = self._repo.list_instructions(project_id, active_only=True)
         if len(active) <= INSTRUCTION_LIMIT:
             return tuple(active)
@@ -99,11 +105,13 @@ class KnowledgeService:
     # ------------------------------------------------------------ instructions
 
     def list_instructions(self, project_id: str) -> list[Instruction]:
+        """List the project's instructions."""
         return self._repo.list_instructions(project_id)
 
     def create_instruction(
         self, project_id: str, text: str, *, active: bool, actor_id: str
     ) -> Instruction:
+        """Index and store a new instruction with an audit event."""
         instruction = Instruction(
             str(uuid.uuid4()), project_id, text.strip(), active, actor_id, datetime.now(UTC)
         )
@@ -123,6 +131,7 @@ class KnowledgeService:
         active: bool | None,
         actor_id: str,
     ) -> Instruction:
+        """Change an instruction's text and/or active flag, re-indexing new text."""
         text = text.strip() if text is not None else None
         if self._repo.get_instruction(project_id, instruction_id) is None:
             raise KnowledgeNotFound("Instruction not found")
@@ -138,6 +147,7 @@ class KnowledgeService:
         return updated
 
     def delete_instruction(self, project_id: str, instruction_id: str, *, actor_id: str) -> None:
+        """Delete an instruction and drop it from the index."""
         deleted = self._repo.delete_instruction(
             project_id, instruction_id,
             audit=_audit(actor_id, "instruction_deleted", "instruction", instruction_id,
@@ -150,6 +160,7 @@ class KnowledgeService:
     # ------------------------------------------------------------------- pairs
 
     def list_pairs(self, project_id: str, *, status: PairStatus | None = "approved") -> list[SqlPair]:
+        """List the project's SQL pairs, by default only approved ones."""
         return self._repo.list_pairs(project_id, status=status)
 
     def create_pair(
@@ -173,6 +184,7 @@ class KnowledgeService:
         )
 
     def delete_pair(self, project_id: str, pair_id: str, *, actor_id: str) -> None:
+        """Delete a SQL pair and drop it from the index."""
         deleted = self._repo.delete_pair(
             project_id, pair_id,
             audit=_audit(actor_id, "sql_pair_deleted", "sql_pair", pair_id, project_id, {}),
@@ -238,6 +250,7 @@ class KnowledgeService:
         ]
 
     def approve(self, project_id: str, pair_id: str, *, actor_id: str, mdl: Mdl) -> SqlPair:
+        """Re-check a proposal against the current model, index it and mark it approved."""
         pair = self._proposed(project_id, pair_id)
         check_pair_sql(pair.logical_sql, mdl)  # the model may have changed since it was proposed
         self._index(project_id, PAIRS_NAMESPACE, pair.id, pair.question, "sql_pair")
@@ -252,6 +265,7 @@ class KnowledgeService:
         return decided
 
     def reject(self, project_id: str, pair_id: str, *, actor_id: str, reason: str = "") -> SqlPair:
+        """Mark a proposal rejected, recording the reason in the audit event."""
         pair = self._proposed(project_id, pair_id)
         decided = self._repo.decide_pair(
             project_id, pair_id, status="rejected", actor_id=actor_id,
@@ -263,6 +277,7 @@ class KnowledgeService:
         return decided
 
     def _proposed(self, project_id: str, pair_id: str) -> SqlPair:
+        """Load a pair that is still awaiting a decision, or raise."""
         pair = self._repo.get_pair(project_id, pair_id)
         if pair is None:
             raise KnowledgeNotFound("Proposal not found")
@@ -273,6 +288,7 @@ class KnowledgeService:
     # ------------------------------------------------------------------- index
 
     def _index(self, project_id: str, namespace: str, record_id: str, text: str, kind: str) -> None:
+        """Embed the text and upsert it into the vector store under the namespace."""
         vectors = self._embedder.embed([text])
         if len(vectors) != 1:
             raise ValueError("Embedder must return exactly one vector")
@@ -284,6 +300,7 @@ class KnowledgeService:
 
     def _unindex(self, project_id: str, namespace: str, record_id: str) -> None:
         # Reads re-check the repository, so a point that cannot be deleted now is inert.
+        """Best-effort removal from the vector store (a stale point is inert: reads re-check)."""
         with contextlib.suppress(Exception):
             self._store.delete_records(project_id, namespace, [record_id])
 
@@ -292,6 +309,7 @@ def _audit(
     actor_id: str, action: str, resource_type: str, resource_id: str, project_id: str,
     details: dict[str, object],
 ) -> AuditEvent:
+    """Build an audit event with the project id added to its details."""
     return AuditEvent(
         actor_id, action, resource_type, resource_id, {"project_id": project_id, **details}
     )

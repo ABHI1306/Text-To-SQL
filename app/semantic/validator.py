@@ -25,14 +25,17 @@ from app.semantic.compiler import (
 
 @dataclass(frozen=True)
 class ValidationResult:
+    """Outcome of validating compiled SQL: the errors found, if any."""
     errors: tuple[CompileError, ...]
 
     @property
     def ok(self) -> bool:
+        """True when no errors were found."""
         return not self.errors
 
 
 def _fail(code: CompileErrorCode, message: str, identifier: str | None = None) -> ValidationResult:
+    """A failed result holding one error."""
     return ValidationResult((CompileError(code, message, identifier),))
 
 
@@ -58,6 +61,7 @@ def validate_compiled_sql(sql: str, mdl: Mdl) -> ValidationResult:
 
 
 def _check_relations(root: exp.Expr, mdl: Mdl) -> ValidationResult:
+    """Require each model CTE to select only from its model's table and no other relations."""
     tables = {model.name: model.table_reference.lower() for model in mdl.models}
     cte_refs = cte_reference_ids(root)
     model_ctes: dict[str, exp.CTE] = {}
@@ -97,4 +101,5 @@ def _check_relations(root: exp.Expr, mdl: Mdl) -> ValidationResult:
 
 
 def _qualified(table: exp.Table) -> str:
+    """Lowercase dotted name of a table, including catalog and schema."""
     return ".".join(part for part in (table.catalog, table.db, table.name) if part).lower()

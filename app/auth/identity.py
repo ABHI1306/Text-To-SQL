@@ -1,3 +1,5 @@
+"""Role resolution and the repository contract for external (LDAP/OIDC) identities."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -7,6 +9,7 @@ from app.core.types import JsonValue
 
 
 class IdentityRepository(Protocol):
+    """Storage the auth service needs to map external groups to roles and provision accounts."""
     def get_identity_mappings(self, source: str) -> list[tuple[str, str]]:
         """(match, role name) pairs in the order a DBA created them."""
         ...

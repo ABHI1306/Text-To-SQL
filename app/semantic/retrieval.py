@@ -1,3 +1,5 @@
+"""Hybrid (vector plus keyword) retrieval of the models relevant to a question."""
+
 from __future__ import annotations
 
 import contextlib
@@ -19,6 +21,7 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 @dataclass(frozen=True)
 class RetrievedModel:
+    """A model trimmed to its relevant columns, with its retrieval score."""
     name: str
     description: str
     table_reference: str
@@ -28,6 +31,7 @@ class RetrievedModel:
 
 @dataclass(frozen=True)
 class RetrievalResult:
+    """Models, relationships, raw matches and approved knowledge found for a question."""
     models: tuple[RetrievedModel, ...]
     relationships: tuple[Relationship, ...]
     matches: tuple[VectorMatch, ...]
@@ -45,6 +49,7 @@ class RetrievalCache:
     def __init__(
         self, seconds: float, entries: int = 256, clock: Callable[[], float] = time.monotonic
     ) -> None:
+        """Set the TTL, the entry cap and the clock (injectable for tests)."""
         self._seconds = seconds
         self._entries = entries
         self._clock = clock
@@ -52,6 +57,7 @@ class RetrievalCache:
         self._lock = Lock()
 
     def get(self, key: tuple[object, ...]) -> RetrievalResult | None:
+        """The cached result if present and not expired, else None."""
         with self._lock:
             hit = self._items.get(key)
             if hit is None or self._clock() - hit[0] >= self._seconds:
@@ -61,6 +67,7 @@ class RetrievalCache:
             return hit[1]
 
     def put(self, key: tuple[object, ...], result: RetrievalResult) -> None:
+        """Store a result, evicting the oldest entries beyond the cap."""
         with self._lock:
             self._items[key] = (self._clock(), result)
             self._items.move_to_end(key)
@@ -68,11 +75,13 @@ class RetrievalCache:
                 self._items.popitem(last=False)
 
     def clear(self) -> None:
+        """Drop every cached result."""
         with self._lock:
             self._items.clear()
 
 
 class RetrievalService:
+    """Finds the models for a question by blending vector and keyword scores."""
     def __init__(
         self,
         embedder: EmbedderPort,
@@ -83,6 +92,7 @@ class RetrievalService:
         knowledge: KnowledgeLookup | None = None,
         cache: RetrievalCache | None = None,
     ) -> None:
+        """Set the embedder, vector store and options; ``keyword_weight`` must be in 0..1."""
         if not 0 <= keyword_weight <= 1:
             raise ValueError("keyword_weight must be between 0 and 1")
         self._embedder = embedder
@@ -102,6 +112,7 @@ class RetrievalService:
         limit: int = 5,
         max_columns_per_model: int = 12,
     ) -> RetrievalResult:
+        """Models, relationships and knowledge for ``question``, using the cache when set."""
         if not question.strip():
             raise ValueError("Question cannot be empty")
         if limit < 1 or max_columns_per_model < 1:
@@ -126,6 +137,7 @@ class RetrievalService:
         limit: int,
         max_columns_per_model: int,
     ) -> RetrievalResult:
+        """Embed, rank, pick models, expand through relationships and attach approved knowledge."""
         vectors = self._embedder.embed([question])
         if len(vectors) != 1:
             raise ValueError("Embedder must return exactly one vector for a question")
@@ -184,6 +196,7 @@ class RetrievalService:
         question: str,
         matches: Sequence[VectorMatch],
     ) -> list[tuple[float, VectorMatch]]:
+        """Score matches as a blend of vector score and question-word overlap, best first."""
         query_tokens = _tokens(question)
         if not query_tokens:
             return [(match.score, match) for match in matches]
@@ -198,10 +211,12 @@ class RetrievalService:
 
 
 def _tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric word set of ``text``."""
     return set(_TOKEN_PATTERN.findall(text.casefold()))
 
 
 def _payload_string(payload: Mapping[str, JsonValue], key: str) -> str:
+    """String value of ``key`` in a match payload, or an empty string."""
     value = payload.get(key)
     return value if isinstance(value, str) else ""
 
@@ -212,6 +227,7 @@ def _prune_model(
     question: str,
     max_columns: int,
 ) -> RetrievedModel:
+    """Keep the columns that best match the question and primary keys, up to ``max_columns``."""
     query_tokens = _tokens(question)
     scored_columns: list[tuple[int, MdlColumn]] = []
     for column in model.columns:

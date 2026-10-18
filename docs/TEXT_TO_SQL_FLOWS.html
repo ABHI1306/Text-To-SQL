@@ -1,0 +1,364 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Text-to-SQL Flows</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column, two wide figures that scroll sideways inside their own frame. */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --fg: #1a2230;
+  --muted: #5b6678;
+  --line: #c9d0db;
+  --band: #eceff4;
+  --accent: #0e6f68;
+  --accent-soft: #d9efec;
+  --gate: #b4530a;
+  --gate-soft: #fbe9d6;
+  --fail: #9f2d3a;
+  --fail-soft: #f7e0e3;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1419; --panel: #161d26; --fg: #e3e9f1; --muted: #98a4b6; --line: #34404f;
+    --band: #1a232e; --accent: #5fd2c6; --accent-soft: #123a38; --gate: #f0a45d; --gate-soft: #3a2a17;
+    --fail: #ef8a97; --fail-soft: #3b1d23; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1419; --panel: #161d26; --fg: #e3e9f1; --muted: #98a4b6; --line: #34404f;
+  --band: #1a232e; --accent: #5fd2c6; --accent-soft: #123a38; --gate: #f0a45d; --gate-soft: #3a2a17;
+  --fail: #ef8a97; --fail-soft: #3b1d23; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 16px; line-height: 1.55;
+  padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); line-height: 1.15; margin: 0 0 12px; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 1.35rem; margin: 0 0 6px; text-wrap: balance; }
+h3 { font-size: 1rem; margin: 0 0 8px; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 1.05rem; }
+.tag { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; display: block; }
+section { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.frame { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+figcaption { color: var(--muted); font-size: 0.9rem; max-width: 80ch; }
+.fig { display: block; min-width: 860px; width: 100%; height: auto; color: var(--fg); font-family: var(--sans); }
+
+/* svg parts */
+.band { fill: var(--band); }
+.band-t { fill: var(--muted); font-size: 13px; font-weight: 600; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 5; }
+.lane { fill: var(--panel); stroke: var(--fg); stroke-width: 1.2; }
+.lane-t { fill: var(--fg); font-size: 12.5px; font-weight: 600; font-family: var(--mono); }
+.msg { stroke: var(--fg); stroke-width: 1.5; fill: none; }
+.msg.ret { stroke-dasharray: 5 4; }
+.gatel, .msg.warn { stroke: var(--gate); }
+.mk { fill: var(--fg); }
+.mk-gate, .mk-warn { fill: var(--gate); }
+.lbl { fill: var(--fg); font-size: 12px; font-family: var(--mono); }
+.gate-t, .warn-t { fill: var(--gate); font-weight: 500; }
+.done { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.2; }
+.done-t { fill: var(--accent); font-size: 13px; font-weight: 600; }
+.node { fill: var(--panel); stroke: var(--fg); stroke-width: 1.2; }
+.node.gate { stroke: var(--gate); stroke-width: 2; fill: var(--gate-soft); }
+.nt { fill: var(--fg); font-size: 13px; font-weight: 600; }
+.ns { fill: var(--muted); font-size: 11.5px; }
+.sys { fill: var(--accent); font-size: 11px; font-family: var(--mono); }
+.side { fill: var(--panel); stroke: var(--fg); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.side.fail { stroke: var(--fail); fill: var(--fail-soft); }
+.side.loop { stroke: var(--gate); fill: var(--gate-soft); }
+.side.ok { stroke: var(--accent); fill: var(--accent-soft); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.85rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 18px; height: 12px; border-radius: 3px; border: 2px solid var(--fg); background: var(--panel); }
+.sw.g { border-color: var(--gate); background: var(--gate-soft); }
+.sw.f { border-color: var(--fail); background: var(--fail-soft); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card h3 { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0; }
+code, pre { font-family: var(--mono); font-size: 0.82rem; }
+pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--band); border-radius: 6px; padding: 10px; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 0.92rem; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td code { color: var(--gate); }
+.note { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; padding: 12px 14px; max-width: 80ch; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<main>
+  <header>
+    <span class="tag">Study sheet</span>
+    <h1>Two flows through the Text-to-SQL platform</h1>
+    <p class="lede">Case 1 is what a DBA does once to connect a database. Case 2 is what happens each time a user asks a question. Case 2 only works because Case 1 left four things behind: a project, a live model, vectors in Qdrant and row policies.</p>
+  </header>
+
+  <section id="case1">
+    <div>
+      <span class="tag">Case 1</span>
+      <h2>A DBA connects a database</h2>
+      <p>Seven steps, one per wizard screen. Every step goes through the API. The orange arrows are the steps that refuse unsafe input.</p>
+    </div>
+    <figure>
+      <div class="frame"><svg viewBox="0 0 1190 1208" role="img" aria-label="Sequence of seven steps a DBA performs to connect a database: sign in, test connection, create project, choose tables, introspect, save the semantic model and deploy it. The API talks to metadata-db, demo-db, Ollama and Qdrant." class="fig">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker><marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-gate"/></marker></defs>
+<rect x="0" y="96" width="1190" height="134" rx="4" class="band"/>
+<text x="14" y="167" class="band-t">1  Sign in</text>
+<rect x="0" y="252" width="1190" height="94" rx="4" class="band"/>
+<text x="14" y="303" class="band-t">2  Test connection</text>
+<rect x="0" y="368" width="1190" height="94" rx="4" class="band"/>
+<text x="14" y="419" class="band-t">3  Create project</text>
+<rect x="0" y="484" width="1190" height="134" rx="4" class="band"/>
+<text x="14" y="555" class="band-t">4  Choose tables</text>
+<rect x="0" y="640" width="1190" height="134" rx="4" class="band"/>
+<text x="14" y="711" class="band-t">5  Introspect</text>
+<rect x="0" y="796" width="1190" height="134" rx="4" class="band"/>
+<text x="14" y="867" class="band-t">6  Save model (MDL)</text>
+<rect x="0" y="952" width="1190" height="174" rx="4" class="band"/>
+<text x="14" y="1043" class="band-t">7  Deploy</text>
+<line x1="150" y1="68" x2="150" y2="1160" class="life"/>
+<rect x="88" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="150" y="54" text-anchor="middle" class="lane-t">DBA browser</text>
+<line x1="340" y1="68" x2="340" y2="1160" class="life"/>
+<rect x="278" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="340" y="54" text-anchor="middle" class="lane-t">API (FastAPI)</text>
+<line x1="530" y1="68" x2="530" y2="1160" class="life"/>
+<rect x="468" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="530" y="54" text-anchor="middle" class="lane-t">metadata-db</text>
+<line x1="720" y1="68" x2="720" y2="1160" class="life"/>
+<rect x="658" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="720" y="54" text-anchor="middle" class="lane-t">demo-db</text>
+<line x1="910" y1="68" x2="910" y2="1160" class="life"/>
+<rect x="848" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="910" y="54" text-anchor="middle" class="lane-t">Ollama</text>
+<line x1="1100" y1="68" x2="1100" y2="1160" class="life"/>
+<rect x="1038" y="30" width="124" height="38" rx="5" class="lane"/>
+<text x="1100" y="54" text-anchor="middle" class="lane-t">Qdrant</text>
+<line x1="156" y1="136" x2="333" y2="136" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="129" text-anchor="middle" class="lbl">login</text>
+<line x1="346" y1="176" x2="523" y2="176" class="msg" marker-end="url(#ar)"/>
+<text x="435" y="169" text-anchor="middle" class="lbl">verify password hash</text>
+<line x1="334" y1="216" x2="157" y2="216" class="msg ret" marker-end="url(#ar)"/>
+<text x="245" y="209" text-anchor="middle" class="lbl">JWT token</text>
+<line x1="156" y1="292" x2="333" y2="292" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="285" text-anchor="middle" class="lbl">test connection</text>
+<line x1="346" y1="332" x2="713" y2="332" class="msg gatel" marker-end="url(#arg)"/>
+<text x="530" y="325" text-anchor="middle" class="lbl gate-t">allowlist + read-only</text>
+<line x1="156" y1="408" x2="333" y2="408" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="401" text-anchor="middle" class="lbl">create project</text>
+<line x1="346" y1="448" x2="523" y2="448" class="msg gatel" marker-end="url(#arg)"/>
+<text x="435" y="441" text-anchor="middle" class="lbl gate-t">save + encrypt credentials</text>
+<line x1="156" y1="524" x2="333" y2="524" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="517" text-anchor="middle" class="lbl">pick tables</text>
+<line x1="346" y1="564" x2="713" y2="564" class="msg" marker-end="url(#ar)"/>
+<text x="530" y="557" text-anchor="middle" class="lbl">read table list</text>
+<line x1="346" y1="604" x2="523" y2="604" class="msg" marker-end="url(#ar)"/>
+<text x="435" y="597" text-anchor="middle" class="lbl">save selection</text>
+<line x1="156" y1="680" x2="333" y2="680" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="673" text-anchor="middle" class="lbl">introspect</text>
+<line x1="346" y1="720" x2="713" y2="720" class="msg" marker-end="url(#ar)"/>
+<text x="530" y="713" text-anchor="middle" class="lbl">read columns, samples</text>
+<line x1="346" y1="760" x2="903" y2="760" class="msg" marker-end="url(#ar)"/>
+<text x="625" y="753" text-anchor="middle" class="lbl">draft descriptions</text>
+<line x1="156" y1="836" x2="333" y2="836" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="829" text-anchor="middle" class="lbl">save MDL</text>
+<line x1="346" y1="876" x2="713" y2="876" class="msg gatel" marker-end="url(#arg)"/>
+<text x="530" y="869" text-anchor="middle" class="lbl gate-t">check names exist</text>
+<line x1="346" y1="916" x2="523" y2="916" class="msg" marker-end="url(#ar)"/>
+<text x="435" y="909" text-anchor="middle" class="lbl">save revision N</text>
+<line x1="156" y1="992" x2="333" y2="992" class="msg" marker-end="url(#ar)"/>
+<text x="245" y="985" text-anchor="middle" class="lbl">deploy revision N</text>
+<line x1="346" y1="1032" x2="903" y2="1032" class="msg" marker-end="url(#ar)"/>
+<text x="625" y="1025" text-anchor="middle" class="lbl">embed snippets</text>
+<line x1="346" y1="1072" x2="1093" y2="1072" class="msg" marker-end="url(#ar)"/>
+<text x="720" y="1065" text-anchor="middle" class="lbl">store vectors</text>
+<line x1="346" y1="1112" x2="523" y2="1112" class="msg" marker-end="url(#ar)"/>
+<text x="435" y="1105" text-anchor="middle" class="lbl">mark revision active</text>
+<rect x="170" y="1164" width="1100" height="32" rx="16" class="done"/>
+<text x="720" y="1184" text-anchor="middle" class="done-t">Model is live. Users with project access can now ask questions.</text>
+</svg></div>
+      <figcaption>The API is the only component that talks to the four backing systems. The browser never reaches the databases. Dashed arrow: response. Orange arrow: a safety check that can reject the request.</figcaption>
+    </figure>
+    <div class="legend"><span><i class="sw"></i>normal call</span><span><i class="sw g"></i>safety check</span></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>After step</th><th>What now exists</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>A signed JWT proving who the DBA is</td><td>Browser</td></tr>
+          <tr><td>3</td><td>A project with Fernet-encrypted credentials. The password is never stored in plain text.</td><td>metadata-db</td></tr>
+          <tr><td>5</td><td>A draft model: tables, columns, relationships, plain-English descriptions</td><td>In the wizard</td></tr>
+          <tr><td>6</td><td>MDL revision N, saved but not live. Every table and column was checked against the real catalog.</td><td>metadata-db</td></tr>
+          <tr><td>7</td><td>One vector per model, column and relationship, tagged with project and version. Revision N is now active.</td><td>Qdrant, metadata-db</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Before users can ask anything, the DBA also creates roles and users, grants project access, adds row policies such as <code>region = {{ user.region }}</code>, and sets user attributes such as <code>region = West</code>.</p>
+  </section>
+
+  <section id="case2">
+    <div>
+      <span class="tag">Case 2</span>
+      <h2>A user asks a question</h2>
+      <p>Asha, role User, attribute <code>region = West</code>, asks &ldquo;total orders by customer&rdquo;. The steps below are the LangGraph nodes in <code>app/agent/graph.py</code>, plus the gate and logging code around them.</p>
+    </div>
+    <figure>
+      <div class="frame"><svg viewBox="0 0 1000 804" role="img" aria-label="Pipeline of eleven steps from a user question to rows. Steps seven, eight and nine are safety gates. A failed compile or validation loops through correct_sql at most three times, then ends in a typed failure." class="fig">
+<defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker><marker id="bw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-warn"/></marker></defs>
+<rect x="30" y="24" width="420" height="50" rx="6" class="node gate"/>
+<text x="44" y="44" class="nt">1  Gates</text>
+<text x="44" y="62" class="ns">JWT, ask_question, project access</text>
+<text x="438" y="44" text-anchor="end" class="sys">metadata-db</text>
+<rect x="30" y="94" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="114" class="nt">2  Load context</text>
+<text x="44" y="132" class="ns">active MDL, row policies, Principal</text>
+<text x="438" y="114" text-anchor="end" class="sys">metadata-db</text>
+<line x1="240.0" y1="75" x2="240.0" y2="91" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="164" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="184" class="nt">3  rewrite_followup</text>
+<text x="44" y="202" class="ns">turn “what about East?” into a full question</text>
+<text x="438" y="184" text-anchor="end" class="sys">Ollama (small model)</text>
+<line x1="240.0" y1="145" x2="240.0" y2="161" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="234" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="254" class="nt">4  classify_intent</text>
+<text x="44" y="272" class="ns">data question, small talk, or too vague</text>
+<text x="438" y="254" text-anchor="end" class="sys">Ollama (small model)</text>
+<line x1="240.0" y1="215" x2="240.0" y2="231" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="304" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="324" class="nt">5  retrieve_context</text>
+<text x="44" y="342" class="ns">embed question, nearest snippets, hybrid rank</text>
+<text x="438" y="324" text-anchor="end" class="sys">Ollama embed + Qdrant</text>
+<line x1="240.0" y1="285" x2="240.0" y2="301" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="374" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="394" class="nt">6  generate_sql</text>
+<text x="44" y="412" class="ns">LLM writes logical SQL (business names only)</text>
+<text x="438" y="394" text-anchor="end" class="sys">Ollama (SQL model)</text>
+<line x1="240.0" y1="355" x2="240.0" y2="371" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="444" width="420" height="50" rx="6" class="node gate"/>
+<text x="44" y="464" class="nt">7  compile_sql</text>
+<text x="44" y="482" class="ns">map to real tables, add this user’s row policy</text>
+<text x="438" y="464" text-anchor="end" class="sys">pure code, no I/O</text>
+<line x1="240.0" y1="425" x2="240.0" y2="441" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="514" width="420" height="50" rx="6" class="node gate"/>
+<text x="44" y="534" class="nt">8  validate_sql</text>
+<text x="44" y="552" class="ns">allowlist check, then EXPLAIN dry run</text>
+<text x="438" y="534" text-anchor="end" class="sys">demo-db (EXPLAIN only)</text>
+<line x1="240.0" y1="495" x2="240.0" y2="511" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="584" width="420" height="50" rx="6" class="node gate"/>
+<text x="44" y="604" class="nt">9  execute_sql</text>
+<text x="44" y="622" class="ns">READ ONLY, timeout, row cap</text>
+<text x="438" y="604" text-anchor="end" class="sys">demo-db</text>
+<line x1="240.0" y1="565" x2="240.0" y2="581" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="654" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="674" class="nt">10  summarize + chart</text>
+<text x="44" y="692" class="ns">optional, grounded in the returned rows</text>
+<text x="438" y="674" text-anchor="end" class="sys">Ollama (small model)</text>
+<line x1="240.0" y1="635" x2="240.0" y2="651" class="msg" marker-end="url(#b)"/>
+<rect x="30" y="724" width="420" height="50" rx="6" class="node"/>
+<text x="44" y="744" class="nt">11  Record + stream</text>
+<text x="44" y="762" class="ns">audit event, save thread turn, send rows</text>
+<text x="438" y="744" text-anchor="end" class="sys">metadata-db</text>
+<line x1="240.0" y1="705" x2="240.0" y2="721" class="msg" marker-end="url(#b)"/>
+<rect x="600" y="234.0" width="370" height="50" rx="6" class="side"/>
+<text x="614" y="254.0" class="nt">clarify or respond</text>
+<text x="614" y="272.0" class="ns">reply directly, no SQL runs</text>
+<line x1="452" y1="259.0" x2="597" y2="259.0" class="msg" marker-end="url(#b)"/>
+<text x="525.0" y="252.0" text-anchor="middle" class="lbl">not a data question</text>
+<rect x="600" y="304.0" width="370" height="50" rx="6" class="side fail"/>
+<text x="614" y="324.0" class="nt">OUT_OF_SCOPE</text>
+<text x="614" y="342.0" class="ns">no relevant model found, typed failure</text>
+<line x1="452" y1="329.0" x2="597" y2="329.0" class="msg" marker-end="url(#b)"/>
+<text x="525.0" y="322.0" text-anchor="middle" class="lbl">nothing retrieved</text>
+<rect x="600" y="479.0" width="370" height="50" rx="6" class="side loop"/>
+<text x="614" y="499.0" class="nt">correct_sql  (max 3 tries)</text>
+<text x="614" y="517.0" class="ns">error codes go back to the LLM</text>
+<polyline points="452,480 520,480 520,494.0 597,494.0" class="msg warn" marker-end="url(#bw)"/>
+<text x="470" y="474" class="lbl warn-t">fails</text>
+<polyline points="452,528 520,528 520,514.0 597,514.0" class="msg warn" marker-end="url(#bw)"/>
+<text x="470" y="524" class="lbl warn-t">fails</text>
+<polyline points="785,479.0 785,450 452,450" class="msg warn" marker-end="url(#bw)"/>
+<text x="795" y="464.5" class="lbl warn-t">new SQL, compile again</text>
+<rect x="600" y="584.0" width="370" height="50" rx="6" class="side fail"/>
+<text x="614" y="604.0" class="nt">structured_failure</text>
+<text x="614" y="622.0" class="ns">after 3 tries: typed error, nothing runs</text>
+<polyline points="930,529.0 930,584.0" class="msg warn" marker-end="url(#bw)"/>
+<text x="936" y="560.5" class="lbl warn-t">still failing</text>
+<rect x="600" y="724.0" width="370" height="50" rx="6" class="side ok"/>
+<text x="614" y="744.0" class="nt">done event to the browser</text>
+<text x="614" y="762.0" class="ns">rows, summary, chart, thread id</text>
+<line x1="452" y1="749.0" x2="597" y2="749.0" class="msg" marker-end="url(#b)"/>
+</svg></div>
+      <figcaption>Three steps are safety gates (orange): compile adds the row policy, validate re-checks the output and dry-runs it, execute runs read-only. A failure at compile or validate loops back through the LLM at most three times, then ends as a typed failure. Nothing unvalidated reaches the database.</figcaption>
+    </figure>
+    <div class="legend"><span><i class="sw"></i>step</span><span><i class="sw g"></i>safety gate or retry</span><span><i class="sw f"></i>typed failure</span></div>
+
+    <div>
+      <h3>The same question, in four forms (illustrative)</h3>
+      <div class="cards">
+        <div class="card"><h3>1 Her words</h3><pre>total orders by customer</pre></div>
+        <div class="card"><h3>2 What the LLM sees</h3><pre>CREATE TABLE orders (
+  order_id, customer_id,
+  total_amount, region)</pre><p>Business names only. No physical tables, no policies.</p></div>
+        <div class="card"><h3>3 Logical SQL</h3><pre>SELECT c.name, COUNT(*)
+FROM orders o
+JOIN customers c ...
+GROUP BY c.name</pre></div>
+        <div class="card"><h3>4 Compiled SQL</h3><pre>WITH m_orders AS (
+  SELECT ... FROM public.tbl_orders
+  WHERE region = %(p_region)s)
+SELECT ... LIMIT 1000
+-- p_region = 'West'</pre><p>Same code for Ravi gives <code>'East'</code>. A user with no region gets <code>FALSE</code>, so zero rows.</p></div>
+      </div>
+    </div>
+
+    <div>
+      <h3>What can stop a question, and how it shows up</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Situation</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>User lacks <code>ask_question</code></td><td>403</td></tr>
+            <tr><td>Project not in the user&rsquo;s list</td><td>404, so the project&rsquo;s existence is hidden</td></tr>
+            <tr><td>No model deployed</td><td>409, &ldquo;Deploy a semantic model before asking questions&rdquo;</td></tr>
+            <tr><td>Ollama down</td><td><code>LLM_UNAVAILABLE</code>, 503</td></tr>
+            <tr><td>No relevant model retrieved</td><td><code>OUT_OF_SCOPE</code></td></tr>
+            <tr><td>SQL still invalid after 3 corrections</td><td>Typed failure, 422</td></tr>
+            <tr><td>User has no value for a policy attribute</td><td>Zero rows (deny by default)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="link">
+    <div>
+      <span class="tag">How they connect</span>
+      <h2>What Case 2 reads from Case 1</h2>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Left behind by the DBA</th><th>Used when a user asks</th></tr></thead>
+        <tbody>
+          <tr><td>Project with encrypted credentials</td><td>Decrypted to reach the warehouse</td></tr>
+          <tr><td>Active MDL revision</td><td><code>load_deployed_mdl</code> fetches the live model</td></tr>
+          <tr><td>Vectors in Qdrant</td><td><code>retrieve_context</code> finds the relevant models</td></tr>
+          <tr><td>Row policies and user attributes</td><td>The compiler adds the <code>WHERE</code> inside each model&rsquo;s CTE</td></tr>
+          <tr><td>Users, roles, project access</td><td>JWT, capability and project checks at the door</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Written from reading the code. Nothing here was run end to end, and the SQL in the four forms is an example, not captured output.</p>
+  </section>
+</main>
+
+</body></html>

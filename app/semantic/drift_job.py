@@ -14,14 +14,21 @@ from app.semantic.drift import DriftResult, detect_drift
 
 
 class MdlSource(Protocol):
-    def get_active_mdl_version(self, project_id: str) -> int | None: ...
+    """Read access to a project's deployed MDL documents."""
+
+    def get_active_mdl_version(self, project_id: str) -> int | None:
+        """Deployed MDL version of the project, or None."""
+        ...
 
     def get_mdl(
         self, project_id: str, version: int | None = None
-    ) -> dict[str, object] | None: ...
+    ) -> dict[str, object] | None:
+        """MDL document of ``version`` (the latest when omitted), or None."""
+        ...
 
 
 def load_mdl(document: Mapping[str, object]) -> Mdl:
+    """Validate a stored MDL document, ignoring its storage-only keys."""
     return Mdl.model_validate(
         {key: value for key, value in document.items() if key not in {"project_id", "revision"}}
     )
@@ -40,6 +47,7 @@ def snapshot_live(catalog: CatalogPort, mdl: Mdl) -> dict[str, CatalogTableProfi
 
 
 def _split(reference: str) -> tuple[str, str]:
+    """Split ``schema.table`` into its parts, defaulting the schema to ``public``."""
     schema, _, table = reference.rpartition(".")
     return (schema or "public", table)
 
@@ -68,12 +76,14 @@ class DriftJobHandler:
         reports: DriftRepoPort,
         notify: Callable[[str, str, dict[str, object]], None] | None = None,
     ) -> None:
+        """Wire the MDL source, per-project catalog factory, report store and notifier."""
         self._source = source
         self._catalog_for = catalog_for
         self._reports = reports
         self._notify = notify
 
     def __call__(self, context: JobContext) -> Mapping[str, object]:
+        """Compare the deployed MDL with the live catalog, save a report and notify on drift."""
         project_id = context.job.project_id
         compared = compare_with_deployed(self._source, self._catalog_for(project_id), project_id)
         if compared is None:

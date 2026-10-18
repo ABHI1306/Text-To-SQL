@@ -18,9 +18,11 @@ from app.semantic.runner import run_logical_sql
 
 
 class AskEvalBackend:
+    """Evaluation backend that asks through the real service as the run's starting account."""
     def __init__(self, repository: PostgresMetadataRepository,
                  governance: PostgresGovernanceRepository, settings: Settings,
                  project_id: str, user_id: str) -> None:
+        """Re-load the account's access, build its runtime and the ask service for the run."""
         context = repository.get_auth_context(user_id)
         if context is None or project_id not in context.project_ids:
             raise LookupError("The account that started the run no longer has access")
@@ -35,12 +37,14 @@ class AskEvalBackend:
         )
 
     def ask(self, question: str) -> AskResult:
+        """Ask one question through the full pipeline with the account's principal and policies."""
         return self._service.ask(
             self._project_id, self._runtime.version, self._runtime.mdl, self._principal,
             self._runtime.policies, question,
         )
 
     def reference_rows(self, logical_sql: str) -> list[list[Any]] | str:
+        """Run a reference query through the compiler; rows, or ``code: message`` on failure."""
         outcome = run_logical_sql(
             logical_sql, self._runtime.mdl, self._principal, self._runtime.policies,
             self._runtime.warehouse, self._runtime.max_rows,
@@ -50,13 +54,16 @@ class AskEvalBackend:
         return outcome.rows
 
     def close(self) -> None:
+        """Release the ask service and the project runtime."""
         self._close()
         self._runtime.close()
 
 
 def backend_factory(repository: PostgresMetadataRepository,
                     governance: PostgresGovernanceRepository, settings: Settings) -> BackendFactory:
+    """Return a ``BackendFactory`` that builds an ``AskEvalBackend`` per project and user."""
     def build(project_id: str, user_id: str) -> AskEvalBackend:
+        """Create the backend for one project and the user who started the run."""
         return AskEvalBackend(repository, governance, settings, project_id, user_id)
 
     return build

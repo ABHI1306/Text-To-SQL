@@ -1,3 +1,5 @@
+"""Warehouse connection security: credential encryption, host allowlist, read-only test."""
+
 import ipaddress
 import json
 import socket
@@ -15,6 +17,7 @@ from app.config import Settings
 
 
 class ConnectionRequest(BaseModel):
+    """A warehouse connection submitted by a user; validated and never echoed back."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     display_name: str = Field(min_length=1, max_length=120, alias="displayName")
@@ -29,6 +32,7 @@ class ConnectionRequest(BaseModel):
     @field_validator("host")
     @classmethod
     def validate_host(cls, value: str) -> str:
+        """Reject hosts containing URL or userinfo characters; normalise to lower case."""
         if any(char in value for char in "/?#@"):
             raise ValueError("Host must be a hostname or IP address")
         return value.rstrip(".").lower()
@@ -36,6 +40,7 @@ class ConnectionRequest(BaseModel):
     @field_validator("ssl_ca_certificate")
     @classmethod
     def validate_ca_certificate(cls, value: str | None) -> str | None:
+        """Require a PEM-encoded CA certificate of bounded size."""
         if value is not None and len(value) > 64_000:
             raise ValueError("CA certificate is too large")
         if value is not None and "BEGIN CERTIFICATE" not in value:
@@ -45,6 +50,7 @@ class ConnectionRequest(BaseModel):
 
 @dataclass(frozen=True)
 class ConnectionTestResult:
+    """Outcome of a successful connection test: server version and latency."""
     server_version: str
     latency_ms: int
 
@@ -54,6 +60,7 @@ class ConnectionTestError(ValueError):
 
 
 def get_fernet(settings: Settings) -> Fernet:
+    """Build the Fernet cipher from ``CONNECTION_ENCRYPTION_KEY`` or raise ``ValueError``."""
     if not settings.connection_encryption_key:
         raise ValueError("CONNECTION_ENCRYPTION_KEY is not configured")
     try:
@@ -63,6 +70,7 @@ def get_fernet(settings: Settings) -> Fernet:
 
 
 def encrypt_connection(request: ConnectionRequest, settings: Settings) -> bytes:
+    """Encrypt the connection's username, password, database and CA certificate."""
     payload = {
         "username": request.username,
         "password": request.password.get_secret_value(),
@@ -73,6 +81,7 @@ def encrypt_connection(request: ConnectionRequest, settings: Settings) -> bytes:
 
 
 def decrypt_connection(encrypted: bytes, settings: Settings) -> dict[str, str | None]:
+    """Decrypt and type-check stored credentials; raise if corrupt or invalid."""
     try:
         payload: Any = json.loads(get_fernet(settings).decrypt(encrypted))
     except (InvalidToken, json.JSONDecodeError) as error:
@@ -103,6 +112,7 @@ _FORBIDDEN_NAMES = {"metadata.google.internal", "metadata", "instance-data"}
 
 
 def _address_is_forbidden(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for link-local addresses, including IPv4-mapped IPv6 forms."""
     mapped = getattr(address, "ipv4_mapped", None)  # ::ffff:169.254.169.254 is the same host
     if mapped is not None:
         address = mapped
@@ -160,6 +170,7 @@ def validate_allowed_hosts(hosts: list[str]) -> list[str]:
 
 
 def _host_is_allowed(host: str, allowlist: tuple[str, ...]) -> bool:
+    """True when the host equals, or its IP falls inside, an allowlist entry."""
     normalized = host.rstrip(".").casefold()
     for item in allowlist:
         candidate = item.strip().casefold()
@@ -180,6 +191,10 @@ def test_connection(
     request: ConnectionRequest,
     settings: Settings,
 ) -> ConnectionTestResult:
+    """Check the host against the deny and allow lists, then test with a read-only login.
+
+    Raises ``ConnectionTestError`` with a generic message so no driver detail leaks.
+    """
     if host_is_forbidden(request.host):
         raise ConnectionTestError("Database host is not allowed")
     if not _host_is_allowed(request.host, settings.allowed_database_hosts):
@@ -212,6 +227,10 @@ def _run_connection_test(
     request: ConnectionRequest,
     ssl_root_cert: str | None,
 ) -> ConnectionTestResult:
+    """Connect read-only and refuse accounts that can write to the warehouse.
+
+    Uses ``verify-full`` TLS when a CA certificate is given.
+    """
     started = time.perf_counter()
     parameters: dict[str, str] = {
         "host": request.host,

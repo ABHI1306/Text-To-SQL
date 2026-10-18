@@ -20,12 +20,15 @@ _COLUMNS = (
 
 
 class PostgresDriftRepository:
+    """Stores drift reports and the draft MDL versions created from them."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[Row]:
+        """Open a connection that returns rows as dicts."""
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     def save_report(
@@ -40,6 +43,7 @@ class PostgresDriftRepository:
         findings: list[dict[str, object]],
         created_by: str | None,
     ) -> str:
+        """Save a report; a repeated job slot returns the id of the existing report."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -66,6 +70,7 @@ class PostgresDriftRepository:
     def list_reports(
         self, project_id: str, *, limit: int, before: datetime | None = None
     ) -> list[StoredDriftReport]:
+        """List a project's reports newest first, paged by ``before``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -78,6 +83,7 @@ class PostgresDriftRepository:
             return [_report(row) for row in cursor.fetchall()]
 
     def get_report(self, project_id: str, report_id: str) -> StoredDriftReport | None:
+        """Return one report scoped to its project, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_COLUMNS} FROM drift_reports WHERE id = %s::uuid AND project_id = %s::uuid",
@@ -94,6 +100,7 @@ class PostgresDriftRepository:
         *,
         created_by: str,
     ) -> int | None:
+        """Create a pending MDL version from a report once, audited; ``None`` if one exists."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -137,6 +144,7 @@ class PostgresDriftRepository:
 
 
 def _report(row: Row) -> StoredDriftReport:
+    """Convert a database row to a ``StoredDriftReport``."""
     return StoredDriftReport(
         id=str(row["id"]),
         project_id=str(row["project_id"]),

@@ -41,6 +41,7 @@ _KEY_LOCKS = tuple(Lock() for _ in range(64))
 
 
 def _key_lock(key: str) -> Lock:
+    """Pick the striped lock for an idempotency key (same key, same lock)."""
     return _KEY_LOCKS[zlib.crc32(key.encode()) % len(_KEY_LOCKS)]
 
 
@@ -53,7 +54,9 @@ class Invalid(ValueError):
 
 
 class QueryFailed(Exception):
+    """A saved question's query failed; carries the ``StructuredFailure``."""
     def __init__(self, failure: StructuredFailure) -> None:
+        """Keep the structured failure and use its message as the exception text."""
         super().__init__(failure.message)
         self.failure = failure
 
@@ -74,14 +77,17 @@ RuntimeFactory = Callable[[str], ProjectRuntime]
 
 
 def _utc_now() -> datetime:
+    """The current time as an aware UTC datetime (the default clock)."""
     return datetime.now(UTC)
 
 
 def normalize_schedule(schedule: str) -> str:
+    """Expand a preset name (hourly, daily, weekly) to cron; otherwise return it stripped."""
     return PRESETS.get(schedule.strip().lower(), schedule.strip())
 
 
 class CollabService:
+    """Saved questions, dashboards, shares and scheduled questions, with per-viewer access."""
     def __init__(
         self,
         store: CollabStorePort,
@@ -94,6 +100,7 @@ class CollabService:
         clock: Callable[[], datetime] = _utc_now,
         cache_seconds: int = DEFAULT_CACHE_SECONDS,
     ) -> None:
+        """Store the collaborators; existence checks, clock and cache lifetime are injectable."""
         self._store = store
         self._jobs = jobs
         self._runtime_for = runtime_for
@@ -105,9 +112,11 @@ class CollabService:
 
     # ------------------------------------------------------------------ access
     def _in_project(self, context: AuthContext, project_id: str) -> bool:
+        """Whether the caller is a member of ``project_id``."""
         return project_id in context.project_ids
 
     def _visible(self, context: AuthContext, resource_type: str, record: Record) -> bool:
+        """Whether the caller owns the record or it was shared with them, within their projects."""
         if not self._in_project(context, str(record["project_id"])):
             return False
         if record["owner_id"] == context.user_id:
@@ -122,6 +131,7 @@ class CollabService:
         )
 
     def _own_saved_question(self, context: AuthContext, question_id: str) -> Record:
+        """Load a saved question the caller owns, or raise ``NotFound``."""
         record = self._store.get_saved_question(question_id)
         if (
             record is None
@@ -132,6 +142,7 @@ class CollabService:
         return record
 
     def _own_dashboard(self, context: AuthContext, dashboard_id: str) -> Record:
+        """Load a dashboard the caller owns, or raise ``NotFound``."""
         record = self._store.get_dashboard(dashboard_id)
         if (
             record is None
@@ -143,6 +154,7 @@ class CollabService:
 
     def _record(self, context: AuthContext, action: str, kind: str, target: str,
                 details: Mapping[str, object] | None = None) -> None:
+        """Write an audit event attributed to the caller."""
         self._audit.record(context.user_id, action, kind, target, details or {})
 
     # ------------------------------------------------------------------ saved questions
@@ -150,6 +162,7 @@ class CollabService:
         self, context: AuthContext, project_id: str, question: str, logical_sql: str,
         chart_spec: Record | None,
     ) -> Record:
+        """Validate the logical SQL compiles for the caller, then save it as a question."""
         if not self._in_project(context, project_id):
             raise NotFound("Project not found")
         runtime = self._runtime_for(project_id)
@@ -167,17 +180,20 @@ class CollabService:
         return record
 
     def list_saved_questions(self, context: AuthContext, project_id: str) -> list[Record]:
+        """List the caller's saved questions in a project they belong to."""
         if not self._in_project(context, project_id):
             raise NotFound("Project not found")
         return self._store.list_saved_questions(project_id, context.user_id)
 
     def get_saved_question(self, context: AuthContext, question_id: str) -> Record:
+        """Return a saved question the caller owns or can see through a share."""
         record = self._store.get_saved_question(question_id)
         if record is None or not self._visible(context, "saved_question", record):
             raise NotFound("Saved question not found")
         return record
 
     def delete_saved_question(self, context: AuthContext, question_id: str) -> None:
+        """Delete an owned question along with its schedules and cached results."""
         record = self._own_saved_question(context, question_id)
         for job in self._jobs.list_jobs(JOB_KIND_SAVED_QUESTION, owner_id=context.user_id):
             if job.saved_question_id == question_id:
@@ -234,6 +250,7 @@ class CollabService:
     def saved_question_result(
         self, context: AuthContext, question_id: str, max_rows: int | None
     ) -> Record:
+        """Return the rows of a visible saved question under the caller's own policies."""
         record = self.get_saved_question(context, question_id)
         return self.run_for(context, str(record["project_id"]), record, max_rows=max_rows)
 
@@ -241,6 +258,7 @@ class CollabService:
     def create_dashboard(
         self, context: AuthContext, project_id: str, title: str, layout: Record
     ) -> Record:
+        """Create a dashboard in a project the caller belongs to."""
         if not self._in_project(context, project_id):
             raise NotFound("Project not found")
         record = self._store.create_dashboard(project_id, context.user_id, title, layout)
@@ -249,11 +267,13 @@ class CollabService:
         return record
 
     def list_dashboards(self, context: AuthContext, project_id: str) -> list[Record]:
+        """List the caller's dashboards in a project they belong to."""
         if not self._in_project(context, project_id):
             raise NotFound("Project not found")
         return self._store.list_dashboards(project_id, context.user_id)
 
     def get_dashboard(self, context: AuthContext, dashboard_id: str) -> Record:
+        """Return a visible dashboard with its tiles and whether the caller owns it."""
         record = self._store.get_dashboard(dashboard_id)
         if record is None or not self._visible(context, "dashboard", record):
             raise NotFound("Dashboard not found")
@@ -263,6 +283,7 @@ class CollabService:
     def update_dashboard(
         self, context: AuthContext, dashboard_id: str, title: str | None, layout: Record | None
     ) -> Record:
+        """Change an owned dashboard's title and/or layout."""
         self._own_dashboard(context, dashboard_id)
         record = self._store.update_dashboard(dashboard_id, title, layout)
         if record is None:
@@ -271,6 +292,7 @@ class CollabService:
         return record
 
     def delete_dashboard(self, context: AuthContext, dashboard_id: str) -> None:
+        """Delete an owned dashboard."""
         self._own_dashboard(context, dashboard_id)
         self._store.delete_dashboard(dashboard_id)
         self._record(context, "dashboard_deleted", "dashboard", dashboard_id, {})
@@ -278,6 +300,7 @@ class CollabService:
     def put_tiles(
         self, context: AuthContext, dashboard_id: str, tiles: list[Record]
     ) -> list[Record]:
+        """Replace an owned dashboard's tiles (own questions from this project only)."""
         dashboard = self._own_dashboard(context, dashboard_id)
         if len(tiles) > MAX_TILES:
             raise Invalid(f"A dashboard holds at most {MAX_TILES} tiles")
@@ -307,6 +330,7 @@ class CollabService:
     def tile_result(
         self, context: AuthContext, dashboard_id: str, tile_id: str, max_rows: int | None
     ) -> Record:
+        """Return a tile's rows under the caller's own policies, with its chart spec."""
         dashboard = self._store.get_dashboard(dashboard_id)
         if dashboard is None or not self._visible(context, "dashboard", dashboard):
             raise NotFound("Dashboard not found")
@@ -339,6 +363,7 @@ class CollabService:
         self, context: AuthContext, resource_type: str, resource_id: str, grantee_type: str,
         grantee_id: str, *, thread_owner: Callable[[str], tuple[str, str] | None] | None = None,
     ) -> Record:
+        """Share an owned resource with a user or role after checking the grantee exists."""
         project_id = self._owned_resource(context, resource_type, resource_id, thread_owner)
         if grantee_type == "user":
             if grantee_id == context.user_id:
@@ -359,6 +384,7 @@ class CollabService:
         self, context: AuthContext, resource_type: str, resource_id: str, *,
         thread_owner: Callable[[str], tuple[str, str] | None] | None = None,
     ) -> list[Record]:
+        """List the shares of a resource the caller owns."""
         self._owned_resource(context, resource_type, resource_id, thread_owner)
         return self._store.list_shares(resource_type, resource_id)
 
@@ -366,6 +392,7 @@ class CollabService:
         self, context: AuthContext, share_id: str, *,
         thread_owner: Callable[[str], tuple[str, str] | None] | None = None,
     ) -> None:
+        """Delete a share, provided the caller owns the shared resource."""
         share = self._store.get_share(share_id)
         if share is None:
             raise NotFound("Share not found")
@@ -377,6 +404,7 @@ class CollabService:
                      {"grantee_type": share["grantee_type"], "grantee_id": share["grantee_id"]})
 
     def shared_with_me(self, context: AuthContext) -> list[Record]:
+        """List resources shared with the caller (empty without ``view_shared``)."""
         if "view_shared" not in context.capabilities:
             return []
         items: list[Record] = []
@@ -401,6 +429,7 @@ class CollabService:
 
     # ------------------------------------------------------------------ scheduled questions
     def _schedule_slot(self, schedule: str, timezone: str) -> tuple[str, datetime]:
+        """Normalise and validate a schedule; return the cron string and first slot."""
         cron = normalize_schedule(schedule)
         try:
             return cron, validate_schedule(cron, timezone, self._clock())
@@ -408,6 +437,7 @@ class CollabService:
             raise Invalid(str(error)) from error
 
     def _own_job(self, context: AuthContext, job_id: str) -> ScheduledJob:
+        """Load a saved-question job the caller owns in their projects, or raise ``NotFound``."""
         job = self._jobs.get(job_id)
         if (
             job is None or job.kind != JOB_KIND_SAVED_QUESTION
@@ -419,6 +449,7 @@ class CollabService:
     def schedule_question(
         self, context: AuthContext, saved_question_id: str, schedule: str, timezone: str
     ) -> ScheduledJob:
+        """Create a schedule for an owned saved question."""
         question = self._own_saved_question(context, saved_question_id)
         cron, first = self._schedule_slot(schedule, timezone)
         job = self._jobs.create_job(
@@ -430,14 +461,17 @@ class CollabService:
         return job
 
     def list_scheduled(self, context: AuthContext) -> list[ScheduledJob]:
+        """List the caller's scheduled questions."""
         return self._jobs.list_jobs(JOB_KIND_SAVED_QUESTION, owner_id=context.user_id)
 
     def get_scheduled(self, context: AuthContext, job_id: str) -> ScheduledJob:
+        """Return a scheduled question the caller owns."""
         return self._own_job(context, job_id)
 
     def update_schedule(
         self, context: AuthContext, job_id: str, schedule: str | None, timezone: str | None
     ) -> ScheduledJob:
+        """Change the cron schedule and/or time zone of an owned job."""
         job = self._own_job(context, job_id)
         cron, first = self._schedule_slot(schedule or job.schedule, timezone or job.timezone)
         updated = self._jobs.update_job(job.id, cron, timezone or job.timezone, first)
@@ -448,12 +482,14 @@ class CollabService:
         return updated
 
     def pause(self, context: AuthContext, job_id: str) -> None:
+        """Pause an owned scheduled question."""
         job = self._own_job(context, job_id)
         self._jobs.pause(job.id, "paused_by_owner")
         self._record(context, "schedule_paused", "saved_question",
                      job.saved_question_id or "", {"job_id": job.id})
 
     def resume(self, context: AuthContext, job_id: str) -> ScheduledJob:
+        """Resume an owned scheduled question from its next valid slot."""
         job = self._own_job(context, job_id)
         _, first = self._schedule_slot(job.schedule, job.timezone)
         resumed = self._jobs.resume(job.id, first)
@@ -464,12 +500,14 @@ class CollabService:
         return resumed
 
     def delete_scheduled(self, context: AuthContext, job_id: str) -> None:
+        """Delete an owned scheduled question."""
         job = self._own_job(context, job_id)
         self._jobs.delete_job(job.id)
         self._record(context, "schedule_deleted", "saved_question",
                      job.saved_question_id or "", {"job_id": job.id})
 
     def list_runs(self, context: AuthContext, job_id: str) -> list[Record]:
+        """List the run history of an owned scheduled question."""
         return self._store.list_runs(self._own_job(context, job_id).id)
 
     def run_now(
@@ -494,6 +532,7 @@ class CollabService:
     def _run_manual(
         self, job: ScheduledJob, context: AuthContext, idempotency_key: str | None
     ) -> Record:
+        """Execute a manual run for the current instant and return its stored run record."""
         slot = self._clock()
         self.execute_scheduled(job, slot, context, trigger="manual", idempotency_key=idempotency_key)
         runs = self._store.list_runs(job.id)

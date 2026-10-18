@@ -22,6 +22,7 @@ from app.ports.identity import IdentityUnavailable, VerifiedIdentity
 
 @dataclass(frozen=True)
 class LdapConfig:
+    """Connection settings for the LDAP directory; validated to require TLS by default."""
     uri: str
     service_dn: str
     service_password: str
@@ -36,6 +37,7 @@ class LdapConfig:
     timeout_seconds: float = 5.0
 
     def __post_init__(self) -> None:
+        """Reject missing required fields, a filter without ``{username}`` and plain LDAP."""
         if not self.uri or not self.service_dn or not self.user_base_dn:
             raise ValueError("LDAP uri, service DN and user base DN are required")
         if "{username}" not in self.user_filter:
@@ -49,7 +51,9 @@ ConnectionFactory = Callable[[Server, str, str], Connection]
 
 
 class LdapDirectory:
+    """Authenticates users against LDAP and reads their groups and mapped attributes."""
     def __init__(self, config: LdapConfig, connection_factory: ConnectionFactory | None = None) -> None:
+        """Build the TLS-verifying server object and pick the connection factory."""
         self._config = config
         tls = Tls(
             validate=ssl.CERT_REQUIRED,
@@ -62,6 +66,7 @@ class LdapDirectory:
         self._factory = connection_factory or self._connect
 
     def _connect(self, server: Server, user: str, password: str) -> Connection:
+        """Create a simple-bind connection that raises on errors and times out."""
         return Connection(
             server,
             user=user,
@@ -72,6 +77,7 @@ class LdapDirectory:
         )
 
     def _bound(self, user: str, password: str) -> Connection:
+        """Open, optionally StartTLS and bind a connection, unbinding it on failure."""
         connection = self._factory(self._server, user, password)
         try:
             if not connection.bound:
@@ -86,6 +92,7 @@ class LdapDirectory:
 
     def authenticate(self, username: str, password: str) -> DirectoryIdentity | None:
         # An empty password would be an anonymous bind, which most servers accept.
+        """Verify the password by binding as the user's own entry; ``None`` if refused."""
         if not username.strip() or not password:
             return None
         try:
@@ -120,6 +127,7 @@ class LdapDirectory:
         )
 
     def _find_user(self, username: str) -> tuple[str, Mapping[str, object]] | None:
+        """Find exactly one user entry with the service bind (escaped filter), else ``None``."""
         service = self._bound(self._config.service_dn, self._config.service_password)
         try:
             service.search(
@@ -137,6 +145,7 @@ class LdapDirectory:
         return str(entry.entry_dn), dict(entry.entry_attributes_as_dict)
 
     def _groups(self, dn: str, attributes: Mapping[str, object]) -> tuple[str, ...]:
+        """Collect group DNs and names from ``memberOf`` and the optional group search."""
         names: list[str] = [str(value) for value in _values(attributes.get("memberOf"))]
         if self._config.group_base_dn:
             service = self._bound(self._config.service_dn, self._config.service_password)
@@ -154,6 +163,7 @@ class LdapDirectory:
         return tuple(dict.fromkeys(names))
 
     def _mapped(self, attributes: Mapping[str, object]) -> dict[str, JsonValue]:
+        """Map LDAP attributes to policy attribute keys (single value or list)."""
         lowered = {key.lower(): value for key, value in attributes.items()}
         mapped: dict[str, JsonValue] = {}
         for ldap_attribute, policy_attribute in self._config.attribute_map.items():
@@ -166,6 +176,7 @@ class LdapDirectory:
 
 
 def _values(raw: object) -> list[object]:
+    """Normalise an LDAP attribute value to a list."""
     if raw is None:
         return []
     if isinstance(raw, (list, tuple, set)):

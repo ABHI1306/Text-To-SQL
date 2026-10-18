@@ -46,6 +46,7 @@ ViewAuditContext = Annotated[AuthContext, Depends(require_capability("view_audit
 
 
 class CompilePreviewRequest(BaseModel):
+    """Body for a compile preview: logical SQL, optional draft MDL and preview user."""
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     logical_sql: str = Field(min_length=1, max_length=20_000, alias="logicalSql")
@@ -55,6 +56,7 @@ class CompilePreviewRequest(BaseModel):
 
 
 class PolicyRequest(BaseModel):
+    """Body for a row policy, plus the user it is test-compiled as."""
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     name: str = Field(min_length=1, max_length=64)
@@ -65,6 +67,7 @@ class PolicyRequest(BaseModel):
     test_user_id: UUID = Field(alias="testUserId")
 
     def to_policy(self) -> RowPolicy:
+        """Build the domain ``RowPolicy``; raises ``ValueError`` if the policy is invalid."""
         return RowPolicy(
             name=self.name,
             model=self.model,
@@ -74,6 +77,7 @@ class PolicyRequest(BaseModel):
 
 
 def _error_json(error: CompileError) -> dict[str, object]:
+    """Serialise a compiler error with its code, identifier and suggestions."""
     return {
         "code": error.code.value,
         "message": error.message,
@@ -83,12 +87,14 @@ def _error_json(error: CompileError) -> dict[str, object]:
 
 
 def _mdl_from_document(document: dict[str, object]) -> Mdl:
+    """Build an ``Mdl`` from a stored document, dropping storage-only keys."""
     return Mdl.model_validate(
         {key: value for key, value in document.items() if key not in {"project_id", "revision"}}
     )
 
 
 def _principal(context: AuthContext) -> Principal:
+    """Convert the authenticated context into the ``Principal`` the compiler enforces."""
     return Principal(
         user_id=context.user_id,
         role_name=context.role_name,
@@ -101,6 +107,11 @@ def _principal(context: AuthContext) -> Principal:
 def _load_principal(
     repository: PostgresMetadataRepository, context: AuthContext, user_id: UUID
 ) -> Principal:
+    """Load another account's principal to preview as it, if the caller may.
+
+    The target must share a project (DBA excepted). Non-self previews need ``manage_policies``
+    and an account that holds no capability the caller lacks.
+    """
     target = repository.get_auth_context(str(user_id))
     if target is None or not (
         context.role_name == "DBA" or set(target.project_ids) & set(context.project_ids)
@@ -119,6 +130,7 @@ def _load_principal(
 
 
 def _policy_json(stored: StoredPolicy) -> dict[str, object]:
+    """Serialise a stored row policy into its API shape."""
     return {
         "id": stored.id,
         "name": stored.policy.name,
@@ -133,6 +145,7 @@ def _policy_json(stored: StoredPolicy) -> dict[str, object]:
 
 
 def _saved_json(saved: SavedPolicy) -> dict[str, object]:
+    """Serialise a saved policy with its validation warnings and test compilation."""
     compilation = saved.validation.test_compilation
     return {
         **_policy_json(saved.stored),
@@ -144,6 +157,7 @@ def _saved_json(saved: SavedPolicy) -> dict[str, object]:
 
 
 def _compiled_json(compiled: CompiledQuery) -> dict[str, object]:
+    """Serialise a compile result: SQL, parameters, applied policies and errors."""
     return {
         "ok": compiled.ok,
         "sql": compiled.sql,
@@ -165,6 +179,10 @@ def compile_preview(
     governance: GovernanceDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Compile logical SQL for a project, optionally as another user (``edit_mdl``).
+
+    A sample run needs a preview user and the saved model, and every as-user preview is audited.
+    """
     require_project_access(context, project_id)
     if body.sample and (body.preview_as_user_id is None or body.mdl is not None):
         # A sample reads the warehouse, so it must run as a named account's row policies and
@@ -217,6 +235,7 @@ def compile_preview(
 def _run_sample(
     repository: PostgresMetadataRepository, project_id: UUID, compiled: CompiledQuery, mdl: Mdl
 ) -> dict[str, object]:
+    """Run the compiled SQL read-only for at most ``SAMPLE_ROWS`` rows after validating it."""
     from app.adapters.warehouse.postgres import PostgresWarehouseAdapter
     from app.api.routes import _project_connection_details
     from app.config import get_settings
@@ -247,6 +266,7 @@ def _run_sample(
 
 
 def _json_cell(value: object) -> object:
+    """Pass JSON-native cells through; stringify everything else."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     return str(value)
@@ -272,6 +292,7 @@ def deploy_report(
 
 
 def _policy_mdl(repository: PostgresMetadataRepository, project_id: UUID) -> Mdl:
+    """Load the active MDL that a policy is checked against; 409 if none is saved."""
     version = repository.get_active_mdl_version(str(project_id))
     document = repository.get_mdl(str(project_id), version)
     if document is None:
@@ -285,6 +306,7 @@ def list_row_policies(
     context: ManagePoliciesContext,
     governance: GovernanceDependency,
 ) -> dict[str, object]:
+    """List the project's row-level security policies (``manage_policies``)."""
     require_project_access(context, project_id)
     return {
         "items": [_policy_json(item) for item in PolicyService(governance).list(str(project_id))]
@@ -301,6 +323,7 @@ def create_row_policy(
     repository: RepositoryDependency,
     governance: GovernanceDependency,
 ) -> dict[str, object]:
+    """Create a row policy after validating and test-compiling it (``manage_policies``)."""
     require_project_access(context, project_id)
     test_principal = _load_principal(repository, context, body.test_user_id)
     try:
@@ -329,6 +352,7 @@ def update_row_policy(
     repository: RepositoryDependency,
     governance: GovernanceDependency,
 ) -> dict[str, object]:
+    """Replace a row policy after validating and test-compiling it (``manage_policies``)."""
     require_project_access(context, project_id)
     test_principal = _load_principal(repository, context, body.test_user_id)
     try:
@@ -362,6 +386,7 @@ def delete_row_policy(
     context: ManagePoliciesContext,
     governance: GovernanceDependency,
 ) -> Response:
+    """Delete a row policy (requires ``manage_policies``)."""
     require_project_access(context, project_id)
     try:
         PolicyService(governance).delete(str(project_id), str(policy_id), actor_id=context.user_id)
@@ -371,10 +396,12 @@ def delete_row_policy(
 
 
 def _role_names(repository: PostgresMetadataRepository) -> list[str]:
+    """Names of every defined role."""
     return [str(role["name"]) for role in repository.list_roles()]
 
 
 def _policy_or_422(body: PolicyRequest) -> RowPolicy:
+    """Build the ``RowPolicy`` from the request, turning invalid input into a 422."""
     try:
         return body.to_policy()
     except ValueError as error:
@@ -382,6 +409,7 @@ def _policy_or_422(body: PolicyRequest) -> RowPolicy:
 
 
 def _rejection(error: PolicyRejected) -> HTTPException:
+    """Turn a rejected policy into a 422 listing its compiler errors."""
     return HTTPException(
         status_code=422,
         detail={
@@ -392,6 +420,7 @@ def _rejection(error: PolicyRejected) -> HTTPException:
 
 
 def _audit_json(record: AuditRecord) -> dict[str, Any]:
+    """Serialise an audit record into its camelCase API shape."""
     return {
         "id": record.id,
         "actorId": record.actor_id,
@@ -417,6 +446,7 @@ def browse_audit(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[int | None, Query(ge=1)] = None,
 ) -> dict[str, object]:
+    """Browse the audit log with filters, newest first, paged by cursor (``view_audit``)."""
     try:
         page = audit.browse(
             AuditFilter(
@@ -498,6 +528,7 @@ def export_audit_csv(
 
 
 class MappingItem(BaseModel):
+    """One directory group (or claim value) and the role it maps to."""
     model_config = ConfigDict(extra="forbid")
 
     match: str = Field(min_length=1, max_length=512)
@@ -505,6 +536,7 @@ class MappingItem(BaseModel):
 
 
 class IdentityMappingsRequest(BaseModel):
+    """Body replacing all group-to-role mappings for one identity source."""
     model_config = ConfigDict(extra="forbid")
 
     source: str = Field(pattern="^(ldap|oidc)$")
@@ -516,6 +548,7 @@ def list_identity_mappings(
     _context: ManageRolesContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List directory and SSO group-to-role mappings (``manage_roles``)."""
     return {"items": repository.list_identity_mappings()}
 
 

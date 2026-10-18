@@ -24,12 +24,14 @@ ManageUsersContext = Annotated[AuthContext, Depends(require_capability("manage_u
 
 
 class ResetPasswordRequest(BaseModel):
+    """Body for an administrator-set password (minimum 12 characters)."""
     model_config = ConfigDict(extra="forbid")
 
     password: SecretStr = Field(min_length=12, max_length=1024)
 
 
 def _find_user(repository: PostgresMetadataRepository, user_id: UUID) -> dict[str, object]:
+    """Return the user row with ``user_id`` or raise a 404."""
     for user in repository.list_users():
         if str(user["id"]) == str(user_id):
             return user
@@ -50,6 +52,7 @@ def _require_not_stronger(
 
 @router.get("/capabilities")
 def list_capabilities(_context: ManageRolesContext) -> dict[str, object]:
+    """List every capability name that a role can be granted."""
     return {"items": sorted(_CAPABILITIES)}
 
 
@@ -60,6 +63,7 @@ def unlock_user(
     repository: RepositoryDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Clear the lockout on an account; refused for accounts stronger than the caller."""
     user = _find_user(repository, user_id)
     _require_not_stronger(context, repository, user)
     try:
@@ -77,6 +81,7 @@ def delete_user(
     repository: RepositoryDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Delete an account, refusing self-deletion and removal of the last user manager."""
     if str(user_id) == str(context.user_id):
         raise HTTPException(status_code=422, detail="You cannot delete your own account")
     user = _find_user(repository, user_id)
@@ -102,6 +107,7 @@ def reset_user_password(
     repository: RepositoryDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Set a new password on a local account and force a change at next login."""
     user = _find_user(repository, user_id)
     if user.get("auth_source") != "local":
         raise HTTPException(status_code=422, detail="Only local accounts have a password to reset")

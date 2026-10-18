@@ -20,16 +20,23 @@ from app.semantic.retrieval import RetrievalCache
 
 
 class MdlSource(Protocol):
-    def get_active_mdl_version(self, project_id: str) -> int | None: ...
+    """Read-only view of a repository's deployed semantic model."""
 
-    def get_mdl(self, project_id: str, version: int | None = None) -> dict[str, object] | None: ...
+    def get_active_mdl_version(self, project_id: str) -> int | None:
+        """The deployed model version for the project, or None when nothing is deployed."""
+        ...
+
+    def get_mdl(self, project_id: str, version: int | None = None) -> dict[str, object] | None:
+        """The stored model document (latest when ``version`` is None), or None when missing."""
+        ...
 
 
 class NoDeployedModel(LookupError):
-    pass
+    """Raised when a project has no usable deployed semantic model."""
 
 
 def load_deployed_mdl(repository: MdlSource, project_id: str) -> tuple[int, Mdl]:
+    """The active version and its validated ``Mdl``; raises ``NoDeployedModel`` if absent."""
     version = repository.get_active_mdl_version(project_id)
     if version is None:
         raise NoDeployedModel("Deploy a semantic model before asking questions")

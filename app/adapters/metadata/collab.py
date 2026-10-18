@@ -14,30 +14,37 @@ from app.ports.collab import MAX_RUNS_KEPT, CollabStorePort, Record
 
 
 def _clean(row: dict[str, Any] | None) -> Record | None:
+    """Convert UUID values in a row to strings (``None`` stays ``None``)."""
     if row is None:
         return None
     return {key: str(value) if isinstance(value, uuid.UUID) else value for key, value in row.items()}
 
 
 def _clean_all(rows: list[dict[str, Any]]) -> list[Record]:
+    """Apply ``_clean`` to every row."""
     return [item for item in (_clean(row) for row in rows) if item is not None]
 
 
 class PostgresCollabStore:
+    """PostgreSQL implementation of the collaboration store (one connection per call)."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _one(self, sql: str, params: tuple[Any, ...] = ()) -> Record | None:
+        """Run a query and return the first row, or ``None``."""
         with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
             return _clean(connection.execute(sql, params).fetchone())
 
     def _all(self, sql: str, params: tuple[Any, ...] = ()) -> list[Record]:
+        """Run a query and return all rows."""
         with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
             return _clean_all(connection.execute(sql, params).fetchall())
 
     def _run(self, sql: str, params: tuple[Any, ...] = ()) -> int:
+        """Run a statement and return the affected row count."""
         with psycopg.connect(self._dsn) as connection:
             return connection.execute(sql, params).rowcount
 
@@ -46,6 +53,7 @@ class PostgresCollabStore:
         self, project_id: str, owner_id: str, question: str, logical_sql: str,
         chart_spec: Record | None,
     ) -> Record:
+        """Save a question with its logical SQL and optional chart spec."""
         row = self._one(
             """
             INSERT INTO saved_questions (project_id, owner_id, question, logical_sql, chart_spec)
@@ -58,9 +66,11 @@ class PostgresCollabStore:
         return row
 
     def get_saved_question(self, question_id: str) -> Record | None:
+        """Return one saved question, or ``None``."""
         return self._one("SELECT * FROM saved_questions WHERE id = %s::uuid", (question_id,))
 
     def list_saved_questions(self, project_id: str, owner_id: str) -> list[Record]:
+        """List the owner's saved questions in a project, newest first."""
         return self._all(
             "SELECT * FROM saved_questions WHERE project_id = %s::uuid AND owner_id = %s::uuid"
             " ORDER BY created_at DESC",
@@ -68,6 +78,7 @@ class PostgresCollabStore:
         )
 
     def delete_saved_question(self, question_id: str) -> bool:
+        """Delete a saved question and the shares that point at it."""
         with psycopg.connect(self._dsn) as connection:
             connection.execute(
                 "DELETE FROM shares WHERE resource_type = 'saved_question' AND resource_id = %s::uuid",
@@ -81,6 +92,7 @@ class PostgresCollabStore:
     def create_dashboard(
         self, project_id: str, owner_id: str, title: str, layout: Record
     ) -> Record:
+        """Create a dashboard with its layout."""
         row = self._one(
             "INSERT INTO dashboards (project_id, owner_id, title, layout_json)"
             " VALUES (%s::uuid, %s::uuid, %s, %s) RETURNING *",
@@ -90,9 +102,11 @@ class PostgresCollabStore:
         return row
 
     def get_dashboard(self, dashboard_id: str) -> Record | None:
+        """Return one dashboard, or ``None``."""
         return self._one("SELECT * FROM dashboards WHERE id = %s::uuid", (dashboard_id,))
 
     def list_dashboards(self, project_id: str, owner_id: str) -> list[Record]:
+        """List the owner's dashboards in a project, newest first."""
         return self._all(
             "SELECT * FROM dashboards WHERE project_id = %s::uuid AND owner_id = %s::uuid"
             " ORDER BY created_at DESC",
@@ -102,6 +116,7 @@ class PostgresCollabStore:
     def update_dashboard(
         self, dashboard_id: str, title: str | None, layout: Record | None
     ) -> Record | None:
+        """Change the title and/or layout; ``None`` leaves a field as it is."""
         return self._one(
             """
             UPDATE dashboards SET title = COALESCE(%s, title),
@@ -112,6 +127,7 @@ class PostgresCollabStore:
         )
 
     def delete_dashboard(self, dashboard_id: str) -> bool:
+        """Delete a dashboard, its tiles and the shares that point at it."""
         with psycopg.connect(self._dsn) as connection:
             connection.execute(
                 "DELETE FROM shares WHERE resource_type = 'dashboard' AND resource_id = %s::uuid",
@@ -122,6 +138,7 @@ class PostgresCollabStore:
             ).rowcount == 1
 
     def replace_tiles(self, dashboard_id: str, tiles: list[Record]) -> list[Record]:
+        """Replace all tiles of a dashboard, keeping the given order."""
         with psycopg.connect(self._dsn, row_factory=dict_row) as connection:
             connection.execute(
                 "DELETE FROM dashboard_tiles WHERE dashboard_id = %s::uuid", (dashboard_id,)
@@ -145,6 +162,7 @@ class PostgresCollabStore:
         return saved
 
     def list_tiles(self, dashboard_id: str) -> list[Record]:
+        """List a dashboard's tiles in display order."""
         return self._all(
             "SELECT * FROM dashboard_tiles WHERE dashboard_id = %s::uuid ORDER BY sort_order",
             (dashboard_id,),
@@ -155,6 +173,7 @@ class PostgresCollabStore:
         self, resource_type: str, resource_id: str, grantee_type: str, grantee_id: str,
         granted_by: str,
     ) -> Record:
+        """Grant a user or role view access; granting twice returns the existing share."""
         row = self._one(
             """
             INSERT INTO shares (resource_type, resource_id, grantee_type, grantee_id, granted_by)
@@ -169,9 +188,11 @@ class PostgresCollabStore:
         return row
 
     def get_share(self, share_id: str) -> Record | None:
+        """Return one share, or ``None``."""
         return self._one("SELECT * FROM shares WHERE id = %s::uuid", (share_id,))
 
     def list_shares(self, resource_type: str, resource_id: str) -> list[Record]:
+        """List the shares on one resource."""
         return self._all(
             "SELECT * FROM shares WHERE resource_type = %s AND resource_id = %s::uuid"
             " ORDER BY granted_at",
@@ -179,11 +200,13 @@ class PostgresCollabStore:
         )
 
     def delete_share(self, share_id: str) -> bool:
+        """Revoke a share; true if one was removed."""
         return self._run("DELETE FROM shares WHERE id = %s::uuid", (share_id,)) == 1
 
     def has_share(
         self, resource_type: str, resource_id: str, user_id: str, role_name: str
     ) -> bool:
+        """Whether the user, or their role, has been granted the resource."""
         return self._one(
             """
             SELECT 1 AS found FROM shares
@@ -196,6 +219,7 @@ class PostgresCollabStore:
         ) is not None
 
     def list_shared_with(self, user_id: str, role_name: str) -> list[Record]:
+        """List resources shared with the user or role, one row per resource."""
         return self._all(
             """
             SELECT DISTINCT ON (resource_type, resource_id) *
@@ -212,6 +236,7 @@ class PostgresCollabStore:
         self, resource_type: str, resource_id: str, policy_context: str, mdl_version: int,
         now: datetime,
     ) -> Record | None:
+        """Return an unexpired cached result for the same policy context and MDL version."""
         return self._one(
             """
             SELECT columns, rows, truncated, computed_at FROM result_cache
@@ -226,6 +251,7 @@ class PostgresCollabStore:
         columns: list[str], rows: list[list[Any]], truncated: bool, computed_at: datetime,
         expires_at: datetime,
     ) -> None:
+        """Store a result, replacing any entry for the same context and MDL version."""
         self._run(
             """
             INSERT INTO result_cache (resource_type, resource_id, policy_context, mdl_version,
@@ -240,6 +266,7 @@ class PostgresCollabStore:
         )
 
     def invalidate(self, resource_type: str, resource_id: str) -> None:
+        """Drop every cached result for a resource."""
         self._run(
             "DELETE FROM result_cache WHERE resource_type = %s AND resource_id = %s::uuid",
             (resource_type, resource_id),
@@ -251,6 +278,7 @@ class PostgresCollabStore:
         row_count: int | None, error: str | None, trigger: str = "schedule",
         idempotency_key: str | None = None,
     ) -> None:
+        """Record a run once per slot or idempotency key and keep only the latest runs."""
         with psycopg.connect(self._dsn) as connection:
             connection.execute(
                 """
@@ -271,12 +299,14 @@ class PostgresCollabStore:
             )
 
     def find_run_by_key(self, job_id: str, idempotency_key: str) -> Record | None:
+        """Find a run by its idempotency key."""
         return self._one(
             "SELECT * FROM question_runs WHERE job_id = %s::uuid AND idempotency_key = %s",
             (job_id, idempotency_key),
         )
 
     def list_runs(self, job_id: str) -> list[Record]:
+        """List a job's recent runs, newest first."""
         return self._all(
             "SELECT * FROM question_runs WHERE job_id = %s::uuid ORDER BY started_at DESC LIMIT %s",
             (job_id, MAX_RUNS_KEPT),
@@ -284,18 +314,21 @@ class PostgresCollabStore:
 
     # ---------------------------------------------------------------- notifications
     def add_notification(self, user_id: str, kind: str, payload: Record) -> None:
+        """Add an unread notification for a user."""
         self._run(
             "INSERT INTO notifications (user_id, kind, payload) VALUES (%s::uuid, %s, %s)",
             (user_id, kind, Jsonb(payload)),
         )
 
     def list_notifications(self, user_id: str, limit: int) -> list[Record]:
+        """List a user's notifications, newest first."""
         return self._all(
             "SELECT * FROM notifications WHERE user_id = %s::uuid ORDER BY created_at DESC LIMIT %s",
             (user_id, limit),
         )
 
     def mark_notification_read(self, user_id: str, notification_id: str) -> bool:
+        """Mark the user's own unread notification read; true if it changed."""
         return self._run(
             "UPDATE notifications SET read_at = now()"
             " WHERE id = %s::uuid AND user_id = %s::uuid AND read_at IS NULL",
@@ -304,10 +337,12 @@ class PostgresCollabStore:
 
     # ---------------------------------------------------------------- settings
     def get_setting(self, key: str) -> Any | None:
+        """Return an app setting value, or ``None``."""
         row = self._one("SELECT value_json FROM app_settings WHERE key = %s", (key,))
         return row["value_json"] if row else None
 
     def set_setting(self, key: str, value: Any, updated_by: str) -> None:
+        """Create or update an app setting."""
         self._run(
             """
             INSERT INTO app_settings (key, value_json, updated_by) VALUES (%s, %s, %s::uuid)
@@ -322,6 +357,7 @@ class PostgresCollabStore:
     def create_eval_run(
         self, project_id: str, started_by: str, idempotency_key: str
     ) -> tuple[Record, bool]:
+        """Start an eval run; a repeated idempotency key returns the existing run and False."""
         row = self._one(
             """
             INSERT INTO eval_runs (project_id, started_by, idempotency_key)
@@ -342,6 +378,7 @@ class PostgresCollabStore:
     def finish_eval_run(
         self, run_id: str, status: str, summary: Record | None, error: str | None
     ) -> None:
+        """Record the final status, summary and error of an eval run."""
         self._run(
             "UPDATE eval_runs SET status = %s, summary = %s, error = %s, finished_at = now()"
             " WHERE id = %s::uuid",
@@ -349,6 +386,7 @@ class PostgresCollabStore:
         )
 
     def add_eval_result(self, run_id: str, result: Record) -> None:
+        """Add one case result to a run (duplicates are ignored)."""
         self._run(
             """
             INSERT INTO eval_results (run_id, case_id, suite, question, generated_sql, outcome,
@@ -363,14 +401,17 @@ class PostgresCollabStore:
         )
 
     def get_eval_run(self, run_id: str) -> Record | None:
+        """Return one eval run, or ``None``."""
         return self._one("SELECT * FROM eval_runs WHERE id = %s::uuid", (run_id,))
 
     def list_eval_results(self, run_id: str) -> list[Record]:
+        """List a run's case results ordered by suite and case."""
         return self._all(
             "SELECT * FROM eval_results WHERE run_id = %s::uuid ORDER BY suite, case_id", (run_id,)
         )
 
     def previous_eval_run(self, project_id: str, before_run_id: str) -> Record | None:
+        """Return the latest completed run of the project created before the given run."""
         return self._one(
             """
             SELECT * FROM eval_runs
@@ -386,6 +427,7 @@ class InMemoryCollabStore:
     """Dict-backed twin with the same observable behaviour, for unit tests."""
 
     def __init__(self) -> None:
+        """Create empty dicts for every record kind."""
         self.saved: dict[str, Record] = {}
         self.dashboards: dict[str, Record] = {}
         self.tiles: dict[str, list[Record]] = {}
@@ -399,16 +441,19 @@ class InMemoryCollabStore:
 
     @staticmethod
     def _id() -> str:
+        """Return a new UUID string."""
         return str(uuid.uuid4())
 
     @staticmethod
     def _now() -> datetime:
+        """Return the current UTC time."""
         return datetime.now(UTC)
 
     def create_saved_question(
         self, project_id: str, owner_id: str, question: str, logical_sql: str,
         chart_spec: Record | None,
     ) -> Record:
+        """Save a question with its logical SQL and optional chart spec."""
         record: Record = {
             "id": self._id(), "project_id": project_id, "owner_id": owner_id,
             "question": question, "logical_sql": logical_sql, "chart_spec": chart_spec,
@@ -418,14 +463,17 @@ class InMemoryCollabStore:
         return dict(record)
 
     def get_saved_question(self, question_id: str) -> Record | None:
+        """Return one saved question, or ``None``."""
         record = self.saved.get(question_id)
         return dict(record) if record else None
 
     def list_saved_questions(self, project_id: str, owner_id: str) -> list[Record]:
+        """List the owner's saved questions in a project, newest first."""
         return [dict(r) for r in self.saved.values()
                 if r["project_id"] == project_id and r["owner_id"] == owner_id]
 
     def delete_saved_question(self, question_id: str) -> bool:
+        """Delete a saved question and the shares that point at it."""
         self.shares = {k: v for k, v in self.shares.items()
                        if not (v["resource_type"] == "saved_question"
                                and v["resource_id"] == question_id)}
@@ -434,6 +482,7 @@ class InMemoryCollabStore:
     def create_dashboard(
         self, project_id: str, owner_id: str, title: str, layout: Record
     ) -> Record:
+        """Create a dashboard with its layout."""
         record: Record = {
             "id": self._id(), "project_id": project_id, "owner_id": owner_id, "title": title,
             "layout_json": layout, "created_at": self._now(),
@@ -443,16 +492,19 @@ class InMemoryCollabStore:
         return dict(record)
 
     def get_dashboard(self, dashboard_id: str) -> Record | None:
+        """Return one dashboard, or ``None``."""
         record = self.dashboards.get(dashboard_id)
         return dict(record) if record else None
 
     def list_dashboards(self, project_id: str, owner_id: str) -> list[Record]:
+        """List the owner's dashboards in a project, newest first."""
         return [dict(r) for r in self.dashboards.values()
                 if r["project_id"] == project_id and r["owner_id"] == owner_id]
 
     def update_dashboard(
         self, dashboard_id: str, title: str | None, layout: Record | None
     ) -> Record | None:
+        """Change the title and/or layout; ``None`` leaves a field as it is."""
         record = self.dashboards.get(dashboard_id)
         if record is None:
             return None
@@ -463,12 +515,14 @@ class InMemoryCollabStore:
         return dict(record)
 
     def delete_dashboard(self, dashboard_id: str) -> bool:
+        """Delete a dashboard, its tiles and the shares that point at it."""
         self.tiles.pop(dashboard_id, None)
         self.shares = {k: v for k, v in self.shares.items()
                        if not (v["resource_type"] == "dashboard" and v["resource_id"] == dashboard_id)}
         return self.dashboards.pop(dashboard_id, None) is not None
 
     def replace_tiles(self, dashboard_id: str, tiles: list[Record]) -> list[Record]:
+        """Replace all tiles of a dashboard, keeping the given order."""
         self.tiles[dashboard_id] = [
             {
                 "id": self._id(), "dashboard_id": dashboard_id,
@@ -481,12 +535,14 @@ class InMemoryCollabStore:
         return [dict(t) for t in self.tiles[dashboard_id]]
 
     def list_tiles(self, dashboard_id: str) -> list[Record]:
+        """List a dashboard's tiles in display order."""
         return [dict(t) for t in self.tiles.get(dashboard_id, [])]
 
     def create_share(
         self, resource_type: str, resource_id: str, grantee_type: str, grantee_id: str,
         granted_by: str,
     ) -> Record:
+        """Grant a user or role view access; granting twice returns the existing share."""
         for share in self.shares.values():
             if (share["resource_type"], share["resource_id"], share["grantee_type"],
                     share["grantee_id"]) == (resource_type, resource_id, grantee_type, grantee_id):
@@ -500,19 +556,23 @@ class InMemoryCollabStore:
         return dict(record)
 
     def get_share(self, share_id: str) -> Record | None:
+        """Return one share, or ``None``."""
         share = self.shares.get(share_id)
         return dict(share) if share else None
 
     def list_shares(self, resource_type: str, resource_id: str) -> list[Record]:
+        """List the shares on one resource."""
         return [dict(s) for s in self.shares.values()
                 if s["resource_type"] == resource_type and s["resource_id"] == resource_id]
 
     def delete_share(self, share_id: str) -> bool:
+        """Revoke a share; true if one was removed."""
         return self.shares.pop(share_id, None) is not None
 
     def has_share(
         self, resource_type: str, resource_id: str, user_id: str, role_name: str
     ) -> bool:
+        """Whether the user, or their role, has been granted the resource."""
         return any(
             s["resource_type"] == resource_type and s["resource_id"] == resource_id
             and ((s["grantee_type"] == "user" and s["grantee_id"] == user_id)
@@ -521,6 +581,7 @@ class InMemoryCollabStore:
         )
 
     def list_shared_with(self, user_id: str, role_name: str) -> list[Record]:
+        """List resources shared with the user or role, one row per resource."""
         seen: set[tuple[str, str]] = set()
         out: list[Record] = []
         for s in self.shares.values():
@@ -536,6 +597,7 @@ class InMemoryCollabStore:
         self, resource_type: str, resource_id: str, policy_context: str, mdl_version: int,
         now: datetime,
     ) -> Record | None:
+        """Return an unexpired cached result for the same policy context and MDL version."""
         hit = self.cache.get((resource_type, resource_id, policy_context, mdl_version))
         if hit is None or hit["expires_at"] <= now:
             return None
@@ -546,12 +608,14 @@ class InMemoryCollabStore:
         columns: list[str], rows: list[list[Any]], truncated: bool, computed_at: datetime,
         expires_at: datetime,
     ) -> None:
+        """Store a result, replacing any entry for the same context and MDL version."""
         self.cache[(resource_type, resource_id, policy_context, mdl_version)] = {
             "columns": columns, "rows": rows, "truncated": truncated,
             "computed_at": computed_at, "expires_at": expires_at,
         }
 
     def invalidate(self, resource_type: str, resource_id: str) -> None:
+        """Drop every cached result for a resource."""
         self.cache = {k: v for k, v in self.cache.items()
                       if not (k[0] == resource_type and k[1] == resource_id)}
 
@@ -560,6 +624,7 @@ class InMemoryCollabStore:
         row_count: int | None, error: str | None, trigger: str = "schedule",
         idempotency_key: str | None = None,
     ) -> None:
+        """Record a run once per slot or idempotency key and keep only the latest runs."""
         runs = self.runs.setdefault(job_id, [])
         if any(r["slot"] == slot for r in runs):
             return
@@ -573,24 +638,29 @@ class InMemoryCollabStore:
         del runs[MAX_RUNS_KEPT:]
 
     def find_run_by_key(self, job_id: str, idempotency_key: str) -> Record | None:
+        """Find a run by its idempotency key."""
         return next(
             (dict(r) for r in self.runs.get(job_id, []) if r["idempotency_key"] == idempotency_key),
             None,
         )
 
     def list_runs(self, job_id: str) -> list[Record]:
+        """List a job's recent runs, newest first."""
         return [dict(r) for r in self.runs.get(job_id, [])]
 
     def add_notification(self, user_id: str, kind: str, payload: Record) -> None:
+        """Add an unread notification for a user."""
         self.notifications.insert(0, {
             "id": self._id(), "user_id": user_id, "kind": kind, "payload": payload,
             "created_at": self._now(), "read_at": None,
         })
 
     def list_notifications(self, user_id: str, limit: int) -> list[Record]:
+        """List a user's notifications, newest first."""
         return [dict(n) for n in self.notifications if n["user_id"] == user_id][:limit]
 
     def mark_notification_read(self, user_id: str, notification_id: str) -> bool:
+        """Mark the user's own unread notification read; true if it changed."""
         for n in self.notifications:
             if n["id"] == notification_id and n["user_id"] == user_id and n["read_at"] is None:
                 n["read_at"] = self._now()
@@ -598,14 +668,17 @@ class InMemoryCollabStore:
         return False
 
     def get_setting(self, key: str) -> Any | None:
+        """Return an app setting value, or ``None``."""
         return self.settings.get(key)
 
     def set_setting(self, key: str, value: Any, updated_by: str) -> None:
+        """Create or update an app setting."""
         self.settings[key] = value
 
     def create_eval_run(
         self, project_id: str, started_by: str, idempotency_key: str
     ) -> tuple[Record, bool]:
+        """Start an eval run; a repeated idempotency key returns the existing run and False."""
         for run in self.eval_runs.values():
             if run["project_id"] == project_id and run["idempotency_key"] == idempotency_key:
                 return dict(run), False
@@ -621,21 +694,26 @@ class InMemoryCollabStore:
     def finish_eval_run(
         self, run_id: str, status: str, summary: Record | None, error: str | None
     ) -> None:
+        """Record the final status, summary and error of an eval run."""
         self.eval_runs[run_id].update(
             status=status, summary=summary, error=error, finished_at=self._now()
         )
 
     def add_eval_result(self, run_id: str, result: Record) -> None:
+        """Add one case result to a run (duplicates are ignored)."""
         self.eval_results[run_id].append(dict(result))
 
     def get_eval_run(self, run_id: str) -> Record | None:
+        """Return one eval run, or ``None``."""
         run = self.eval_runs.get(run_id)
         return dict(run) if run else None
 
     def list_eval_results(self, run_id: str) -> list[Record]:
+        """List a run's case results ordered by suite and case."""
         return [dict(r) for r in self.eval_results.get(run_id, [])]
 
     def previous_eval_run(self, project_id: str, before_run_id: str) -> Record | None:
+        """Return the latest completed run of the project created before the given run."""
         current = self.eval_runs[before_run_id]
         earlier = [
             r for r in self.eval_runs.values()

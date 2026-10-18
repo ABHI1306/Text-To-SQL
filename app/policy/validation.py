@@ -18,12 +18,14 @@ from app.semantic.compiler import (
 
 @dataclass(frozen=True)
 class PolicyValidation:
+    """Result of save-time policy checks: errors, warnings and the test compilation."""
     errors: tuple[CompileError, ...]
     warnings: tuple[str, ...]
     test_compilation: CompiledQuery | None
 
     @property
     def ok(self) -> bool:
+        """True when there are no errors."""
         return not self.errors
 
 
@@ -94,4 +96,5 @@ def validate_policy(
 
 
 def _failed(*errors: CompileError) -> PolicyValidation:
+    """A failed validation holding ``errors``."""
     return PolicyValidation(errors, (), None)

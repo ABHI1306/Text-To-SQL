@@ -1,3 +1,5 @@
+"""PostgreSQL metadata repository: users, sessions, roles, projects, MDL versions, access."""
+
 from __future__ import annotations
 
 import json
@@ -17,15 +19,19 @@ Row: TypeAlias = dict[str, object]
 
 
 class PostgresMetadataRepository:
+    """Metadata database access for auth, RBAC, projects and MDL versions."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[Row]:
+        """Open a connection that returns rows as dicts."""
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     def get_user_by_username(self, username: str) -> AuthUser | None:
+        """Look a user up by case-insensitive username, with credentials and lock state."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -41,6 +47,7 @@ class PostgresMetadataRepository:
         return _auth_user(row) if row else None
 
     def get_auth_context(self, user_id: str) -> AuthContext | None:
+        """Build the live auth context (capabilities, projects, attributes), or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -106,6 +113,7 @@ class PostgresMetadataRepository:
         window_seconds: int,
         lockout_seconds: int,
     ) -> None:
+        """Count a failed login in a rolling window and lock the account at the limit."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -142,6 +150,7 @@ class PostgresMetadataRepository:
             )
 
     def clear_login_failures(self, user_id: str) -> None:
+        """Reset the failed-login counter and lock."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -162,6 +171,7 @@ class PostgresMetadataRepository:
         refresh_token_hash: str,
         expires_at: datetime,
     ) -> None:
+        """Store a refresh-token session (hash only) in a token family."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -181,6 +191,7 @@ class PostgresMetadataRepository:
         new_expires_at: datetime,
         now: datetime,
     ) -> tuple[str, str | None, str | None]:
+        """Rotate a refresh token once; reuse of a revoked one revokes the whole family."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -224,6 +235,7 @@ class PostgresMetadataRepository:
         return ("rotated", user_id, str(session["id"]))
 
     def session_is_alive(self, session_id: str, now: datetime) -> bool:
+        """Whether any session in the session's family is unrevoked and unexpired."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -239,6 +251,7 @@ class PostgresMetadataRepository:
             return bool(row and row["alive"])
 
     def revoke_refresh_token(self, refresh_token_hash: str, now: datetime) -> None:
+        """Revoke the session holding this refresh-token hash."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -249,6 +262,7 @@ class PostgresMetadataRepository:
             )
 
     def revoke_other_sessions(self, user_id: str, keep_session_id: str, now: datetime) -> None:
+        """Revoke all the user's sessions except the current one."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -261,6 +275,7 @@ class PostgresMetadataRepository:
     def change_password(
         self, user_id: str, password_hash: str, keep_session_id: str, now: datetime
     ) -> None:
+        """Set a new password, clear lockout and revoke the other sessions."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -282,6 +297,7 @@ class PostgresMetadataRepository:
     def append_auth_audit(
         self, actor_id: str | None, action: str, username: str, details: dict[str, object]
     ) -> None:
+        """Record an authentication audit event for a user."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -292,6 +308,7 @@ class PostgresMetadataRepository:
             )
 
     def bootstrap_dba(self, username: str, password_hash: str) -> str:
+        """Create the first DBA account (must change password); fails if it exists."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id FROM roles WHERE name = 'DBA'"
@@ -321,6 +338,7 @@ class PostgresMetadataRepository:
         *,
         actor_id: str | None = None,
     ) -> str:
+        """Create a local user in a role, with an audit event."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM roles WHERE name = %s", (role_name,))
             role = cursor.fetchone()
@@ -349,6 +367,7 @@ class PostgresMetadataRepository:
             return user_id
 
     def reset_local_user(self, username: str, password_hash: str) -> str:
+        """Reset a local user's password, force a change, revoke sessions and audit it."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -391,6 +410,7 @@ class PostgresMetadataRepository:
         encrypted_connection: bytes,
         owner_id: str,
     ) -> None:
+        """Create a project with its encrypted connection and add the owner as a member."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -432,6 +452,7 @@ class PostgresMetadataRepository:
             return versions
 
     def get_project_connection(self, project_id: str) -> dict[str, object] | None:
+        """Return the project's connection settings and setup state, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -447,6 +468,7 @@ class PostgresMetadataRepository:
     def save_selected_tables(
         self, project_id: str, tables: list[dict[str, str]]
     ) -> None:
+        """Save the chosen tables and advance setup to the relationships step."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -459,6 +481,7 @@ class PostgresMetadataRepository:
                 raise KeyError(f"Project {project_id} does not exist")
 
     def save_mdl(self, project_id: str, document: dict[str, object]) -> int:
+        """Save a new pending MDL version and mark setup complete; returns the version."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -490,6 +513,7 @@ class PostgresMetadataRepository:
     def get_mdl(
         self, project_id: str, version: int | None = None
     ) -> dict[str, object] | None:
+        """Return an MDL version (latest by default) with project id and revision, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             if version is None:
                 cursor.execute(
@@ -519,6 +543,7 @@ class PostgresMetadataRepository:
         }
 
     def set_project_sample(self, project_id: str) -> None:
+        """Flag a project as the sample project."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "UPDATE projects SET is_sample = TRUE WHERE id = %s::uuid",
@@ -528,6 +553,7 @@ class PostgresMetadataRepository:
                 raise KeyError(f"Project {project_id} does not exist")
 
     def get_active_mdl_version(self, project_id: str) -> int | None:
+        """Return the active MDL version number, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -547,6 +573,7 @@ class PostgresMetadataRepository:
         deployed_by: str,
         expected_previous_version: int | None,
     ) -> None:
+        """Make a version active under row locks, failing if the active one changed; audited."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id FROM projects WHERE id = %s::uuid FOR UPDATE",
@@ -612,6 +639,7 @@ class PostgresMetadataRepository:
         new_version: int,
         previous_version: int,
     ) -> None:
+        """Roll a failed deployment back to the previous active version."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT id FROM projects WHERE id = %s::uuid FOR UPDATE",
@@ -643,6 +671,7 @@ class PostgresMetadataRepository:
                 )
 
     def list_projects(self, user_id: str) -> list[dict[str, object]]:
+        """List projects the user can see (DBAs all, others by membership or role)."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -670,6 +699,7 @@ class PostgresMetadataRepository:
             return [dict(row) for row in cursor.fetchall()]
 
     def list_roles(self) -> list[dict[str, object]]:
+        """List roles with their capabilities, system roles first."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -684,6 +714,7 @@ class PostgresMetadataRepository:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_role_capabilities(self, role_name: str) -> frozenset[str] | None:
+        """Return a role's capabilities, or ``None`` if the role is unknown."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -706,6 +737,7 @@ class PostgresMetadataRepository:
     def create_role(
         self, name: str, description: str, capabilities: list[str]
     ) -> str:
+        """Create a custom role with its capabilities."""
         role_id = str(uuid4())
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -768,6 +800,7 @@ class PostgresMetadataRepository:
         description: str,
         capabilities: list[str],
     ) -> None:
+        """Update a custom role, moving share and policy references on rename."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT name FROM roles WHERE id = %s::uuid AND is_system = FALSE FOR UPDATE",
@@ -792,6 +825,7 @@ class PostgresMetadataRepository:
             )
 
     def delete_role(self, role_id: str) -> None:
+        """Delete an unused custom role and drop shares and policy exemptions naming it."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -817,6 +851,7 @@ class PostgresMetadataRepository:
                 self._rename_role_references(cursor, str(named["name"]), None)
 
     def list_users(self) -> list[dict[str, object]]:
+        """List users with role, status and lock state."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -830,6 +865,7 @@ class PostgresMetadataRepository:
             return [dict(row) for row in cursor.fetchall()]
 
     def unlock_user(self, user_id: str) -> None:
+        """Clear a user's lockout and failure counters."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -877,6 +913,7 @@ class PostgresMetadataRepository:
             return int(row["total"]) if row else 0
 
     def set_user_role(self, user_id: str, role_name: str) -> None:
+        """Assign an existing role to a user."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -889,6 +926,7 @@ class PostgresMetadataRepository:
                 raise KeyError("User or role does not exist")
 
     def replace_user_project_access(self, user_id: str, project_ids: list[str]) -> None:
+        """Replace the user's direct project memberships."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM users WHERE id = %s::uuid", (user_id,))
             if cursor.fetchone() is None:
@@ -902,6 +940,7 @@ class PostgresMetadataRepository:
             )
 
     def replace_role_project_access(self, role_id: str, project_ids: list[str]) -> None:
+        """Replace the role's project access."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM roles WHERE id = %s::uuid", (role_id,))
             if cursor.fetchone() is None:
@@ -917,6 +956,7 @@ class PostgresMetadataRepository:
             )
 
     def get_user_project_access(self, user_id: str) -> list[str]:
+        """Return the project ids the user is directly a member of."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT project_id FROM project_members WHERE user_id = %s::uuid",
@@ -925,6 +965,7 @@ class PostgresMetadataRepository:
             return [str(row["project_id"]) for row in cursor.fetchall()]
 
     def get_role_project_access(self, role_id: str) -> list[str]:
+        """Return the project ids the role has access to."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT project_id FROM project_role_members WHERE role_id = %s::uuid",
@@ -933,6 +974,7 @@ class PostgresMetadataRepository:
             return [str(row["project_id"]) for row in cursor.fetchall()]
 
     def get_user_attributes(self, user_id: str) -> dict[str, object]:
+        """Return the user's attributes used by row policies."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT key, value FROM user_attributes WHERE user_id = %s::uuid",
@@ -941,6 +983,7 @@ class PostgresMetadataRepository:
             return {str(row["key"]): row["value"] for row in cursor.fetchall()}
 
     def replace_user_attributes(self, user_id: str, attributes: dict[str, object]) -> None:
+        """Replace the user's manually set attributes."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT id FROM users WHERE id = %s::uuid", (user_id,))
             if cursor.fetchone() is None:
@@ -960,6 +1003,7 @@ class PostgresMetadataRepository:
     # ------------------------------------------------------------------ identity
 
     def list_identity_mappings(self) -> list[dict[str, object]]:
+        """List all external-group-to-role mappings."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -974,6 +1018,7 @@ class PostgresMetadataRepository:
             ]
 
     def get_identity_mappings(self, source: str) -> list[tuple[str, str]]:
+        """Return (match, role) mappings for one identity source."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -988,6 +1033,7 @@ class PostgresMetadataRepository:
     def replace_identity_mappings(
         self, source: str, mappings: list[tuple[str, str]], *, actor_id: str
     ) -> None:
+        """Replace a source's role mappings and audit the change."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM identity_mappings WHERE source = %s", (source,))
             for match, role_name in mappings:
@@ -1088,6 +1134,7 @@ class PostgresMetadataRepository:
 
     @staticmethod
     def _validate_project_ids(cursor: psycopg.Cursor[Row], project_ids: list[str]) -> None:
+        """Require unique project ids that all exist."""
         if len(set(project_ids)) != len(project_ids):
             raise ValueError("Project IDs must be unique")
         if not project_ids:
@@ -1101,9 +1148,11 @@ class PostgresMetadataRepository:
             raise KeyError("One or more projects do not exist")
 
     def audit_authentication(self, action: str, user_id: str, details: dict[str, object]) -> None:
+        """Record an authentication audit event for a user id."""
         self.append_auth_audit(user_id, action, user_id, details)
 
     def parse_project_table_selection(self, project_id: str) -> list[dict[str, str]]:
+        """Return the stored table selection as a list, raising if invalid."""
         project = self.get_project_connection(project_id)
         if project is None:
             raise KeyError(f"Project {project_id} does not exist")
@@ -1118,6 +1167,7 @@ class PostgresMetadataRepository:
 
 
 def _auth_user(row: Row) -> AuthUser:
+    """Convert a database row to an ``AuthUser``."""
     return AuthUser(
         user_id=str(row["id"]),
         username=str(row["username"]),

@@ -1,3 +1,5 @@
+"""Thread (chat history) stores: in-memory for tests and PostgreSQL for the API."""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -13,6 +15,7 @@ class InMemoryThreadStore:
     """Process-local thread store for tests and the CLI; the API uses the PostgreSQL one."""
 
     def __init__(self) -> None:
+        """Create empty owner, project, turn and message-id maps."""
         self._owners: dict[str, str] = {}
         self._projects: dict[str, str] = {}
         self._turns: dict[str, list[Turn]] = defaultdict(list)
@@ -20,21 +23,25 @@ class InMemoryThreadStore:
         self._counter = 0
 
     def create(self, thread_id: str, project_id: str, user_id: str) -> None:
+        """Record the thread's project and owner; an existing thread is left unchanged."""
         self._owners.setdefault(thread_id, user_id)
         self._projects.setdefault(thread_id, project_id)
 
     def get(self, thread_id: str) -> ThreadRecord | None:
+        """Return the thread's project and owner, or ``None``."""
         if thread_id not in self._owners:
             return None
         return ThreadRecord(thread_id, self._projects.get(thread_id, ""), self._owners[thread_id])
 
     def messages(self, thread_id: str) -> list[MessageRecord]:
+        """Return every turn of a thread in order."""
         return [
             MessageRecord(message_id, thread_id, turn)
             for message_id, turn in zip(self._ids[thread_id], self._turns[thread_id], strict=True)
         ]
 
     def get_message(self, message_id: str) -> tuple[ThreadRecord, MessageRecord] | None:
+        """Return one message with its thread, or ``None``."""
         for thread_id, ids in self._ids.items():
             if message_id in ids:
                 record = self.get(thread_id)
@@ -43,12 +50,14 @@ class InMemoryThreadStore:
         return None
 
     def history(self, thread_id: str, user_id: str, *, limit: int) -> list[Turn]:
+        """Return the owner's recent answered turns (failures excluded), oldest first."""
         if self._owners.get(thread_id) != user_id:
             return []
         answered = [t for t in self._turns[thread_id] if t.failure_code is None]
         return answered[-limit:]
 
     def list_threads(self, project_id: str, user_id: str, limit: int) -> list[ThreadSummary]:
+        """List the user's threads in a project, newest activity first."""
         mine = [
             tid for tid, owner in self._owners.items()
             if owner == user_id and self._projects.get(tid) == project_id and self._turns[tid]
@@ -61,6 +70,7 @@ class InMemoryThreadStore:
         ]
 
     def append(self, thread_id: str, user_id: str, project_id: str, turn: Turn) -> str | None:
+        """Add a turn, refusing another user's thread; returns the new message id."""
         if self._owners.setdefault(thread_id, user_id) != user_id:
             raise PermissionError("thread belongs to another user")
         self._projects.setdefault(thread_id, project_id)
@@ -82,6 +92,7 @@ _TURN_COLUMNS_M = ", ".join(f"m.{name.strip()}" for name in _TURN_FIELDS.split("
 
 
 def _turn(row: tuple[Any, ...]) -> Turn:
+    """Build a ``Turn`` from a row of the turn columns."""
     (question, standalone, sql, answer, summary, chart, suggestions, latency, code, message,
      trace, model_version) = row
     return Turn(
@@ -91,12 +102,15 @@ def _turn(row: tuple[Any, ...]) -> Turn:
 
 
 class PostgresThreadStore:
+    """Chat history in Postgres, with every read and write tied to the owning user."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def history(self, thread_id: str, user_id: str, *, limit: int) -> list[Turn]:
+        """Return the owner's recent answered turns (failures excluded), oldest first."""
         with psycopg.connect(self._dsn) as connection:
             rows = connection.execute(
                 """
@@ -111,6 +125,7 @@ class PostgresThreadStore:
         return [Turn(*row) for row in reversed(rows)]
 
     def create(self, thread_id: str, project_id: str, user_id: str) -> None:
+        """Record the thread's project and owner; an existing thread is left unchanged."""
         with psycopg.connect(self._dsn) as connection:
             connection.execute(
                 "INSERT INTO threads (id, project_id, user_id) VALUES (%s::uuid, %s::uuid, %s::uuid)"
@@ -119,6 +134,7 @@ class PostgresThreadStore:
             )
 
     def get(self, thread_id: str) -> ThreadRecord | None:
+        """Return the thread's project and owner, or ``None``."""
         with psycopg.connect(self._dsn) as connection:
             row = connection.execute(
                 "SELECT id::text, project_id::text, user_id::text FROM threads WHERE id = %s::uuid",
@@ -127,6 +143,7 @@ class PostgresThreadStore:
         return ThreadRecord(*row) if row else None
 
     def list_threads(self, project_id: str, user_id: str, limit: int) -> list[ThreadSummary]:
+        """List the user's threads in a project, newest activity first."""
         with psycopg.connect(self._dsn) as connection:
             rows = connection.execute(
                 """
@@ -143,6 +160,7 @@ class PostgresThreadStore:
         return [ThreadSummary(r[0], r[1], r[2], r[3].isoformat()) for r in rows]
 
     def messages(self, thread_id: str) -> list[MessageRecord]:
+        """Return every turn of a thread in order."""
         with psycopg.connect(self._dsn) as connection:
             rows = connection.execute(
                 f"""
@@ -154,6 +172,7 @@ class PostgresThreadStore:
         return [MessageRecord(r[0], r[1], _turn(r[2:-1]), r[-1].isoformat()) for r in rows]
 
     def get_message(self, message_id: str) -> tuple[ThreadRecord, MessageRecord] | None:
+        """Return one message with its thread, or ``None``."""
         if not message_id.isdigit():
             return None
         with psycopg.connect(self._dsn) as connection:
@@ -172,6 +191,7 @@ class PostgresThreadStore:
         return thread, MessageRecord(row[3], row[0], _turn(row[4:-1]), row[-1].isoformat())
 
     def append(self, thread_id: str, user_id: str, project_id: str, turn: Turn) -> str | None:
+        """Add a turn, refusing another user's thread; returns the new message id."""
         with psycopg.connect(self._dsn) as connection:
             connection.execute(
                 "INSERT INTO threads (id, project_id, user_id) VALUES (%s::uuid, %s::uuid, %s::uuid)"

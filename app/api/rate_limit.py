@@ -15,7 +15,9 @@ VIEW_PER_MINUTE = 600
 
 
 class SlidingWindowLimiter:
+    """Per-key sliding-window hit counter, safe to share across threads."""
     def __init__(self, window_seconds: float = WINDOW_SECONDS) -> None:
+        """Create an empty limiter whose window is ``window_seconds`` long."""
         self._window = window_seconds
         self._hits: dict[str, deque[float]] = {}
         self._lock = Lock()

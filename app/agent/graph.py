@@ -70,6 +70,7 @@ NODES = (
 
 @dataclass(frozen=True)
 class AgentDeps:
+    """Everything the graph nodes need: the deployed model, policies, ports and limits."""
     mdl: Mdl
     version: int
     policies: Sequence[RowPolicy]
@@ -83,11 +84,13 @@ class AgentDeps:
 
 
 def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """Wire the nodes into the question graph; every query path runs compile, validate, execute."""
     graph: StateGraph[Any, Any, Any, Any] = StateGraph(AgentState)
 
     small = deps.small_llm or deps.llm
 
     def rewrite_followup(state: AgentState) -> dict[str, Any]:
+        """Make a follow-up standalone using thread history; an LLM error is a typed failure."""
         history = state.get("history") or []
         question = state["question"]
         if not history:
@@ -98,6 +101,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
             return {"failure": _llm_down()}
 
     def classify_intent(state: AgentState) -> dict[str, Any]:
+        """Route the question to data question, clarify or respond with the small model."""
         try:
             intent, reply = route_intent(
                 small, state["standalone_question"], [model.name for model in deps.mdl.models]
@@ -107,12 +111,15 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {"intent": intent, "reply": reply}
 
     def clarify(state: AgentState) -> dict[str, Any]:
+        """Terminal node: the clarifying question is already in ``reply``."""
         return {}
 
     def respond(state: AgentState) -> dict[str, Any]:
+        """Terminal node: the chat reply is already in ``reply``."""
         return {}
 
     def retrieve_context(state: AgentState) -> dict[str, Any]:
+        """Retrieve relevant models and knowledge; prune the model to what the prompt may show."""
         try:
             retrieval = deps.retrieval.retrieve(
                 state["project_id"],
@@ -152,12 +159,14 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         }
 
     def generate_sql(state: AgentState) -> dict[str, Any]:
+        """Ask the SQL model for a logical query over the pruned models."""
         prompt = build_generation_prompt(
             state["standalone_question"], state["context_text"], state.get("knowledge_text", "")
         )
         return _candidate(deps.llm, prompt)
 
     def compile_sql(state: AgentState) -> dict[str, Any]:
+        """Compile logical SQL with the caller's row policies; an unexpected error fails closed."""
         try:
             compiled = compile_query(
                 state.get("logical_sql") or "", deps.mdl, state["principal"], deps.policies
@@ -181,6 +190,11 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         }
 
     def validate_sql(state: AgentState) -> dict[str, Any]:
+        """Allowlist-check the compiled SQL, then dry-run it with EXPLAIN.
+
+        Only the SQLSTATE reaches the model, never the physical-object message; an unreachable
+        database ends the run instead of spending correction attempts.
+        """
         sql = state["sql"] or ""
         try:
             result = validate_compiled_sql(sql, deps.mdl)
@@ -213,6 +227,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {"validation_errors": []}
 
     def correct_sql(state: AgentState) -> dict[str, Any]:
+        """Ask the model to fix the rejected query, given the typed errors and allowed names."""
         prompt = build_correction_prompt(
             state["standalone_question"],
             state["context_text"],
@@ -224,6 +239,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {**_candidate(deps.llm, prompt), "attempts": state.get("attempts", 0) + 1}
 
     def execute_sql(state: AgentState) -> dict[str, Any]:
+        """Run the validated query read-only with the row limit; errors become typed failures."""
         try:
             result = deps.warehouse.execute_read_only(
                 ValidatedQuery(sql=state["sql"] or "", parameters=state.get("parameters") or {}),
@@ -238,6 +254,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         }
 
     def summarize(state: AgentState) -> dict[str, Any]:
+        """Optional grounded summary of the rows; any problem just skips it."""
         if deps.summary_llm is None or not state.get("rows"):
             return {}
         try:
@@ -259,6 +276,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {}
 
     def chart(state: AgentState) -> dict[str, Any]:
+        """Optional chart spec, kept only if it passes ``validate_chart_spec``."""
         if deps.summary_llm is None or len(state.get("rows") or []) < 2:
             return {}
         try:
@@ -278,6 +296,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {}
 
     def structured_failure(state: AgentState) -> dict[str, Any]:
+        """Terminal failure node: keep an existing failure or build one from the first error."""
         if state.get("failure"):
             return {}
         errors = tuple(state.get("validation_errors") or ())
@@ -292,16 +311,19 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         }
 
     def retry_or_fail(state: AgentState) -> Literal["correct_sql", "structured_failure"]:
+        """Correct again while attempts remain, else fail."""
         if state.get("attempts", 0) < deps.max_corrections:
             return "correct_sql"
         return "structured_failure"
 
     def after_rewrite(state: AgentState) -> Literal["classify_intent", "structured_failure"]:
+        """Route after rewrite: stop on failure, else classify."""
         return "structured_failure" if state.get("failure") else "classify_intent"
 
     def after_classify(
         state: AgentState,
     ) -> Literal["retrieve_context", "clarify", "respond", "structured_failure"]:
+        """Route by intent: clarify, respond, or retrieve for a data question."""
         if state.get("failure"):
             return "structured_failure"
         intent = state.get("intent")
@@ -312,14 +334,17 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return "retrieve_context"
 
     def after_retrieve(state: AgentState) -> Literal["generate_sql", "structured_failure"]:
+        """Route after retrieval: stop on failure, else generate."""
         return "structured_failure" if state.get("failure") else "generate_sql"
 
     def after_generate(state: AgentState) -> Literal["compile_sql", "structured_failure"]:
+        """Route after generation: stop on failure, else compile."""
         return "structured_failure" if state.get("failure") else "compile_sql"
 
     def after_compile(
         state: AgentState,
     ) -> Literal["validate_sql", "correct_sql", "structured_failure"]:
+        """Route after compile: validate when clean, else correct or fail."""
         if not state.get("validation_errors"):
             return "validate_sql"
         return retry_or_fail(state)
@@ -327,6 +352,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
     def after_validate(
         state: AgentState,
     ) -> Literal["execute_sql", "correct_sql", "structured_failure"]:
+        """Route after validation: execute when clean, else correct or fail."""
         if state.get("failure"):
             return "structured_failure"
         if not state.get("validation_errors"):
@@ -334,6 +360,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return retry_or_fail(state)
 
     def after_execute(state: AgentState) -> Literal["structured_failure", "summarize"]:
+        """Route after execution: stop on failure, else summarize."""
         return "structured_failure" if state.get("failure") else "summarize"
 
     graph.add_node("rewrite_followup", rewrite_followup)
@@ -448,6 +475,7 @@ def route_intent(
 
 
 def _llm_down() -> StructuredFailure:
+    """The retryable failure used when the local model cannot be reached."""
     return StructuredFailure(
         "LLM_UNAVAILABLE", "The local language model is unavailable.", retryable=True
     )
@@ -473,6 +501,7 @@ def _candidate(llm: LLMPort, prompt: str) -> dict[str, Any]:
 
 
 def _parse(raw: str) -> SQLCandidate | None:
+    """The model's reply as an ``SQLCandidate``, or None when it is not valid."""
     try:
         return SQLCandidate.model_validate(json.loads(raw))
     except (ValueError, ValidationError):
@@ -517,6 +546,7 @@ def _usable_pairs(retrieval: RetrievalResult, mdl: Mdl) -> list[SqlPair]:
 
 
 def _compiles(logical_sql: str, mdl: Mdl) -> bool:
+    """True when an approved example compiles against the model; errors just exclude it."""
     try:
         return compile_query(logical_sql, mdl, None).ok
     except Exception:  # noqa: BLE001 - an unusable example is just left out
@@ -524,6 +554,7 @@ def _compiles(logical_sql: str, mdl: Mdl) -> bool:
 
 
 def _prune(mdl: Mdl, retrieval: RetrievalResult) -> Mdl:
+    """Copy of the model limited to the retrieved models, columns, relationships and metrics."""
     selected = {model.name: model for model in retrieval.models}
     models = [
         model.model_copy(update={"columns": list(selected[model.name].columns)})
@@ -540,6 +571,7 @@ def _prune(mdl: Mdl, retrieval: RetrievalResult) -> Mdl:
 
 
 def _allowed_names(mdl: Mdl) -> dict[str, list[str]]:
+    """Names the model may use, grouped as models, columns per model and metrics."""
     names = {"models": [model.name for model in mdl.models]}
     for model in mdl.models:
         names[f"columns of {model.name}"] = [column.name for column in model.columns]

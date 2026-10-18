@@ -35,6 +35,7 @@ def get_pool(dsn: str, max_size: int) -> Any | None:
 
 
 def close_pools() -> None:
+    """Close and forget every shared pool (also registered to run at exit)."""
     with _lock:
         for pool in _pools.values():
             pool.close()

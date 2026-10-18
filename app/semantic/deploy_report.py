@@ -7,6 +7,7 @@ from app.semantic.compiler import compile_query
 
 
 def _share(part: int, total: int) -> dict[str, object]:
+    """Described/total counts with a percentage (100 when there is nothing to describe)."""
     return {
         "described": part,
         "total": total,
@@ -64,6 +65,7 @@ def build_deploy_report(mdl: Mdl) -> dict[str, object]:
 
 
 def _check(kind: str, name: str, sql: str, mdl: Mdl) -> dict[str, object]:
+    """Compile ``sql`` structurally (no principal) and report whether it passed."""
     result = compile_query(sql, mdl, None)
     return {
         "kind": kind,

@@ -25,6 +25,7 @@ from app.semantic.validator import validate_compiled_sql
 
 @dataclass(frozen=True)
 class LogicalRun:
+    """Result of running logical SQL: rows on success, otherwise a typed failure."""
     failure: StructuredFailure | None
     compilation_errors: tuple[CompileError, ...] = ()
     validation_errors: tuple[CompileError, ...] = ()
@@ -36,10 +37,12 @@ class LogicalRun:
 
     @property
     def ok(self) -> bool:
+        """True when the run had no failure."""
         return self.failure is None
 
 
 def failure_from(errors: Sequence[CompileError]) -> StructuredFailure:
+    """Structured failure for the first of ``errors``."""
     first = errors[0] if errors else None
     return StructuredFailure(
         first.code.value if first else "VALIDATION_FAILED",
@@ -58,6 +61,7 @@ class CompileCache:
     """
 
     def __init__(self, max_entries: int = 256) -> None:
+        """Create an empty LRU cache holding at most ``max_entries`` compiled queries."""
         self._max = max_entries
         self._items: OrderedDict[str, CompiledQuery] = OrderedDict()
         self._lock = Lock()
@@ -66,6 +70,7 @@ class CompileCache:
     def key(
         logical_sql: str, mdl: Mdl, principal: Principal, policies: Sequence[RowPolicy]
     ) -> str:
+        """Hash of every compiler input, including the principal, used as the cache key."""
         payload = json.dumps(
             [
                 logical_sql,
@@ -80,6 +85,7 @@ class CompileCache:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def get(self, key: str) -> CompiledQuery | None:
+        """The cached query for ``key`` (marking it recently used), or None."""
         with self._lock:
             found = self._items.get(key)
             if found is not None:
@@ -87,6 +93,7 @@ class CompileCache:
             return found
 
     def put(self, key: str, compiled: CompiledQuery) -> None:
+        """Store a compiled query, evicting the least recently used entry when full."""
         with self._lock:
             self._items[key] = compiled
             self._items.move_to_end(key)
@@ -94,6 +101,7 @@ class CompileCache:
                 self._items.popitem(last=False)
 
     def clear(self) -> None:
+        """Drop every cached query."""
         with self._lock:
             self._items.clear()
 
@@ -122,6 +130,7 @@ def compile_for(
 def execute_compiled(
     compiled: CompiledQuery, mdl: Mdl, warehouse: WarehousePort, max_rows: int
 ) -> LogicalRun:
+    """Re-validate the compiled SQL, then explain and run it read-only; failures stay typed."""
     checked = validate_compiled_sql(compiled.sql, mdl)
     if not checked.ok:
         return LogicalRun(
@@ -158,6 +167,7 @@ def run_logical_sql(
     warehouse: WarehousePort,
     max_rows: int,
 ) -> LogicalRun:
+    """Compile logical SQL for ``principal`` and execute it, returning a ``LogicalRun``."""
     compiled = compile_for(logical_sql, mdl, principal, policies)
     if isinstance(compiled, tuple):
         return LogicalRun(failure_from(compiled), compilation_errors=compiled)

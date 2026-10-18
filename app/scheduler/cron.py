@@ -13,6 +13,7 @@ _SAMPLED_SLOTS = 4
 
 
 def _trigger(schedule: str, timezone: str) -> CronTrigger:
+    """Build a ``CronTrigger`` from a five-field cron string and zone, or raise ``ValueError``."""
     fields = schedule.split()
     if len(fields) != 5:
         raise ValueError("Schedule must be a five-field cron expression")

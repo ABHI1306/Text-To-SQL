@@ -19,6 +19,7 @@ RECENT_QUESTIONS = 200
 
 @dataclass
 class Usage:
+    """Counters for model calls: prompt and completion tokens, GPU milliseconds, call count."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     gpu_ms: int = 0
@@ -26,9 +27,11 @@ class Usage:
 
     @property
     def tokens(self) -> int:
+        """Prompt plus completion tokens."""
         return self.prompt_tokens + self.completion_tokens
 
     def add(self, prompt_tokens: int, completion_tokens: int, gpu_ms: int) -> None:
+        """Add one call's counts and increment the call count."""
         self.prompt_tokens += prompt_tokens
         self.completion_tokens += completion_tokens
         self.gpu_ms += gpu_ms
@@ -49,14 +52,17 @@ class UsageMetrics:
     recent: deque[dict[str, int]] = field(default_factory=lambda: deque(maxlen=RECENT_QUESTIONS))
 
     def add_call(self, usage: Usage) -> None:
+        """Fold one call's usage into the process-wide totals."""
         with self._lock:
             self.totals.add(usage.prompt_tokens, usage.completion_tokens, usage.gpu_ms)
 
     def add_error(self) -> None:
+        """Count one failed model call."""
         with self._lock:
             self.llm_errors += 1
 
     def add_question(self, usage: Usage, latency_ms: int) -> None:
+        """Count a finished question and remember its usage and latency."""
         with self._lock:
             self.questions += 1
             self.recent.append(
@@ -69,6 +75,7 @@ class UsageMetrics:
             )
 
     def snapshot(self) -> dict[str, object]:
+        """A consistent copy of the totals, averages over recent questions and the last 20."""
         with self._lock:
             recent = list(self.recent)
             count = len(recent)
@@ -85,6 +92,7 @@ class UsageMetrics:
             }
 
     def reset(self) -> None:
+        """Zero all counters and forget the recent questions."""
         with self._lock:
             self.totals = Usage()
             self.questions = 0
@@ -120,6 +128,7 @@ def record_call(prompt_tokens: int, completion_tokens: int, gpu_ns: int) -> None
 
 
 def record_error() -> None:
+    """Called by a model adapter when a call fails."""
     METRICS.add_error()
 
 
@@ -127,6 +136,7 @@ def counts_from_ollama(payload: Mapping[str, object]) -> tuple[int, int, int]:
     """(prompt tokens, completion tokens, GPU ns) from an Ollama response body."""
 
     def number(key: str) -> int:
+        """An integer field of the payload, or 0 if missing or not an int."""
         value = payload.get(key)
         return value if isinstance(value, int) and not isinstance(value, bool) else 0
 

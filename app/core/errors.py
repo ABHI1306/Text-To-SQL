@@ -1,3 +1,5 @@
+"""Errors shared by all ports."""
+
 class PortError(RuntimeError):
     """Base error raised when a port operation fails."""
 

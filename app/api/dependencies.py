@@ -1,3 +1,5 @@
+"""FastAPI dependencies: cached stores and services, auth context and capability checks."""
+
 import dataclasses
 from collections.abc import Callable
 from functools import lru_cache
@@ -36,6 +38,7 @@ bearer = HTTPBearer(auto_error=False)
 
 @lru_cache
 def get_repository() -> PostgresMetadataRepository:
+    """Return the cached metadata repository; 503 when no metadata database is set."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(
@@ -69,6 +72,7 @@ def build_directory(settings: Settings) -> LdapDirectory | None:
 
 @lru_cache
 def get_auth_service() -> AuthService:
+    """Return the cached ``AuthService``; 503 when ``JWT_SECRET`` is not set."""
     settings = get_settings()
     if not settings.jwt_secret:
         raise HTTPException(
@@ -89,6 +93,7 @@ def get_auth_service() -> AuthService:
 
 
 def parse_attribute_map(raw: str) -> dict[str, str]:
+    """Parse ``name=value,name=value`` pairs into a dict, skipping malformed pairs."""
     return dict(pair.split("=", 1) for pair in raw.split(",") if "=" in pair)
 
 
@@ -114,6 +119,7 @@ def build_oidc_provider(settings: Settings) -> OidcProvider | None:
 
 @lru_cache
 def get_oidc_service() -> OidcLoginService | None:
+    """Return the cached OIDC login service, or None when OIDC is not configured."""
     settings = get_settings()
     provider = build_oidc_provider(settings)
     if provider is None:
@@ -131,6 +137,7 @@ def _current_context(
     *,
     allow_password_change: bool,
 ) -> AuthContext:
+    """Authenticate the bearer token; map auth failures to 401 and 403 responses."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,6 +166,7 @@ def get_current_context(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> AuthContext:
+    """Authenticate the caller; refuses tokens that must first change password."""
     return _current_context(credentials, auth_service, allow_password_change=False)
 
 
@@ -166,6 +174,7 @@ def get_password_change_context(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> AuthContext:
+    """Authenticate the caller, accepting tokens that must change password."""
     return _current_context(credentials, auth_service, allow_password_change=True)
 
 
@@ -175,6 +184,7 @@ def require_capability(
     """Require a capability; ``per_minute`` also caps how often one user may call the route."""
 
     def check(context: Annotated[AuthContext, Depends(get_current_context)]) -> AuthContext:
+        """Reject callers lacking the capability (403) or over the per-minute limit (429)."""
         if capability not in context.capabilities:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -196,6 +206,7 @@ def require_capability(
 
 @lru_cache
 def get_governance_repository() -> PostgresGovernanceRepository:
+    """Return the cached governance repository; 503 without a metadata database."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(
@@ -207,6 +218,7 @@ def get_governance_repository() -> PostgresGovernanceRepository:
 
 @lru_cache
 def get_thread_store() -> PostgresThreadStore:
+    """Return the cached thread store; 503 without a metadata database."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(
@@ -218,6 +230,7 @@ def get_thread_store() -> PostgresThreadStore:
 
 @lru_cache
 def get_knowledge_repository() -> PostgresKnowledgeRepository:
+    """Return the cached knowledge repository; 503 without a metadata database."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(
@@ -229,6 +242,7 @@ def get_knowledge_repository() -> PostgresKnowledgeRepository:
 
 @lru_cache
 def _knowledge_index() -> tuple[OllamaEmbedderAdapter, QdrantVectorStoreAdapter]:
+    """Return the cached embedder and vector store used to index knowledge."""
     settings = get_settings()
     return (
         OllamaEmbedderAdapter(settings.ollama_url, settings.embedding_model),
@@ -239,6 +253,7 @@ def _knowledge_index() -> tuple[OllamaEmbedderAdapter, QdrantVectorStoreAdapter]
 def get_knowledge_service(
     repository: Annotated[PostgresKnowledgeRepository, Depends(get_knowledge_repository)],
 ) -> KnowledgeService:
+    """Build the ``KnowledgeService`` over the repository and vector index."""
     embedder, vector_store = _knowledge_index()
     return KnowledgeService(repository, embedder, vector_store)
 
@@ -246,16 +261,19 @@ def get_knowledge_service(
 def get_audit_service(
     repository: Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)],
 ) -> AuditService:
+    """Build the ``AuditService`` over the governance repository."""
     return AuditService(repository)
 
 
 def require_project_access(context: AuthContext, project_id: UUID) -> None:
+    """Raise 404 unless the project is in the caller's allowed projects."""
     if str(project_id) not in context.project_ids:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
 @lru_cache
 def get_collab_store() -> PostgresCollabStore:
+    """Return the cached collaboration store; 503 without a metadata database."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(
@@ -286,6 +304,7 @@ def get_collab_service(
     governance: Annotated[PostgresGovernanceRepository, Depends(get_governance_repository)],
     audit: Annotated[AuditService, Depends(get_audit_service)],
 ) -> CollabService:
+    """Build the ``CollabService`` with its job store, runtime factory and audit."""
     from app.adapters.metadata.scheduler import PostgresJobStore
 
     settings = get_settings()

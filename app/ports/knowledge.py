@@ -1,3 +1,5 @@
+"""Port and value types for per-project instructions, approved SQL examples and feedback."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -14,6 +16,7 @@ Rating = Literal["up", "down"]
 
 @dataclass(frozen=True)
 class Instruction:
+    """A free-text rule added to prompts for a project; inactive ones are not used."""
     id: str
     project_id: str
     text: str
@@ -24,6 +27,7 @@ class Instruction:
 
 @dataclass(frozen=True)
 class SqlPair:
+    """A question with its logical SQL, used as an example once its status is approved."""
     id: str
     project_id: str
     question: str
@@ -38,6 +42,7 @@ class SqlPair:
 
 @dataclass(frozen=True)
 class Feedback:
+    """A user's thumbs rating of an answer, which may propose a new SQL pair."""
     id: str
     project_id: str
     user_id: str
@@ -54,11 +59,17 @@ class KnowledgeRepoPort(Protocol):
 
     def list_instructions(
         self, project_id: str, *, active_only: bool = False
-    ) -> list[Instruction]: ...
+    ) -> list[Instruction]:
+        """List a project's instructions, only the active ones when ``active_only``."""
+        ...
 
-    def get_instruction(self, project_id: str, instruction_id: str) -> Instruction | None: ...
+    def get_instruction(self, project_id: str, instruction_id: str) -> Instruction | None:
+        """Return the instruction, or None when missing or in another project."""
+        ...
 
-    def create_instruction(self, instruction: Instruction, *, audit: AuditEvent) -> Instruction: ...
+    def create_instruction(self, instruction: Instruction, *, audit: AuditEvent) -> Instruction:
+        """Store the instruction and its audit event together; return the stored row."""
+        ...
 
     def update_instruction(
         self,
@@ -68,19 +79,29 @@ class KnowledgeRepoPort(Protocol):
         text: str | None,
         active: bool | None,
         audit: AuditEvent,
-    ) -> Instruction | None: ...
+    ) -> Instruction | None:
+        """Change the given ``text``/``active`` (None keeps it); None when missing."""
+        ...
 
     def delete_instruction(
         self, project_id: str, instruction_id: str, *, audit: AuditEvent
-    ) -> bool: ...
+    ) -> bool:
+        """Delete the instruction with its audit event; False when missing."""
+        ...
 
-    def list_pairs(self, project_id: str, *, status: PairStatus | None = None) -> list[SqlPair]: ...
+    def list_pairs(self, project_id: str, *, status: PairStatus | None = None) -> list[SqlPair]:
+        """List a project's SQL pairs, filtered by ``status`` when given."""
+        ...
 
-    def get_pair(self, project_id: str, pair_id: str) -> SqlPair | None: ...
+    def get_pair(self, project_id: str, pair_id: str) -> SqlPair | None:
+        """Return the pair, or None when missing or in another project."""
+        ...
 
     def get_pairs(
         self, project_id: str, pair_ids: Sequence[str], *, status: PairStatus
-    ) -> list[SqlPair]: ...
+    ) -> list[SqlPair]:
+        """Return those of ``pair_ids`` that exist in the project with this ``status``."""
+        ...
 
     def find_duplicate(
         self, project_id: str, question: str, logical_sql: str
@@ -88,7 +109,9 @@ class KnowledgeRepoPort(Protocol):
         """A proposed or approved pair with the same question and SQL, if one exists."""
         ...
 
-    def create_pair(self, pair: SqlPair, *, audit: AuditEvent) -> SqlPair: ...
+    def create_pair(self, pair: SqlPair, *, audit: AuditEvent) -> SqlPair:
+        """Store the pair and its audit event together; return the stored row."""
+        ...
 
     def decide_pair(
         self,
@@ -102,7 +125,9 @@ class KnowledgeRepoPort(Protocol):
         """Move a *proposed* pair to approved or rejected; None when it is not proposed."""
         ...
 
-    def delete_pair(self, project_id: str, pair_id: str, *, audit: AuditEvent) -> bool: ...
+    def delete_pair(self, project_id: str, pair_id: str, *, audit: AuditEvent) -> bool:
+        """Delete the pair with its audit event; False when missing."""
+        ...
 
     def record_feedback(
         self,
@@ -125,4 +150,8 @@ class KnowledgeContext:
 
 
 class KnowledgeLookup(Protocol):
-    def lookup(self, project_id: str, vector: Sequence[float]) -> KnowledgeContext: ...
+    """Looks up the stored knowledge nearest to a question embedding."""
+
+    def lookup(self, project_id: str, vector: Sequence[float]) -> KnowledgeContext:
+        """Return the approved pairs and active instructions closest to ``vector``."""
+        ...

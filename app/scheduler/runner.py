@@ -30,6 +30,7 @@ BATCH_SIZE = 20
 
 
 class OwnerLookup(Protocol):
+    """Looks up the live authorisation context of a job's owner."""
     def get_auth_context(self, user_id: str) -> AuthContext | None:
         """The live context of an active, unlocked account; None otherwise."""
         ...
@@ -37,6 +38,7 @@ class OwnerLookup(Protocol):
 
 @dataclass(frozen=True)
 class JobContext:
+    """Everything a handler needs: the job, the slot, the attempt number and the owner."""
     job: ScheduledJob
     slot: datetime
     attempt: int
@@ -52,10 +54,12 @@ Clock = Callable[[], datetime]
 
 
 def _utc_now() -> datetime:
+    """The current time as an aware UTC datetime (the default clock)."""
     return datetime.now(UTC)
 
 
 class SlotRunner:
+    """Claims due slots from the job store and runs them as the job's owner."""
     def __init__(
         self,
         store: JobStorePort,
@@ -67,6 +71,7 @@ class SlotRunner:
         audit: AuditService | None = None,
         clock: Clock = _utc_now,
     ) -> None:
+        """Store the job store, owner lookup, per-kind handlers, lease, audit and clock."""
         self._store = store
         self._owners = owners
         self._handlers = dict(handlers)
@@ -77,6 +82,7 @@ class SlotRunner:
 
     @property
     def worker_id(self) -> str:
+        """The id this runner uses when claiming slot leases."""
         return self._worker_id
 
     def poll(self, submit: Callable[[Claim], None]) -> int:
@@ -122,6 +128,7 @@ class SlotRunner:
         return status
 
     def _run(self, claim: Claim) -> tuple[str, Mapping[str, object] | None, str | None]:
+        """Re-check the job and its owner, then call the handler; returns status, result, error."""
         job = claim.job
         # Re-read the job: it may have been paused or re-assigned since the slot was claimed.
         current = self._store.get(job.id)
@@ -148,12 +155,14 @@ class SlotRunner:
         return "succeeded", result, None
 
     def _pause(self, job: ScheduledJob, reason: str) -> None:
+        """Pause the job with a reason and write an audit event for it."""
         self._store.pause(job.id, reason)
         self._record(job, "scheduled_job_paused", None, {"kind": job.kind, "reason": reason})
 
     def _record(
         self, job: ScheduledJob, action: str, actor: str | None, details: Mapping[str, object]
     ) -> None:
+        """Write a scheduler audit event, logging instead of raising if that fails."""
         if self._audit is None:
             return
         try:
@@ -163,4 +172,5 @@ class SlotRunner:
 
 
 def _describe(error: BaseException) -> str:
+    """Format an exception as ``Type: message`` with the message cut to 300 characters."""
     return f"{type(error).__name__}: {str(error)[:300]}"

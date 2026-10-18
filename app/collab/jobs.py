@@ -12,7 +12,9 @@ class SavedQuestionJobHandler:
     """Runs one slot as the job's owner (the runner re-loaded and re-checked them just now)."""
 
     def __init__(self, service: CollabService) -> None:
+        """Keep the collaboration service that runs the scheduled question."""
         self._service = service
 
     def __call__(self, context: JobContext) -> Mapping[str, object]:
+        """Run the claimed slot's saved question as the re-loaded owner."""
         return self._service.execute_scheduled(context.job, context.slot, context.owner)

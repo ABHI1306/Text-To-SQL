@@ -1,3 +1,5 @@
+"""Port and value types for conversation threads and their turns."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +8,7 @@ from typing import Any, Protocol
 
 @dataclass(frozen=True)
 class ThreadRecord:
+    """A thread's identity and owner."""
     id: str
     project_id: str
     user_id: str
@@ -64,16 +67,22 @@ class ThreadStorePort(Protocol):
 class ThreadCatalogPort(ThreadStorePort, Protocol):
     """Threads as resources: created, listed and read by the API (history stays owner-only)."""
 
-    def create(self, thread_id: str, project_id: str, user_id: str) -> None: ...
+    def create(self, thread_id: str, project_id: str, user_id: str) -> None:
+        """Register a new thread owned by ``user_id``."""
+        ...
 
     def list_threads(self, project_id: str, user_id: str, limit: int) -> list[ThreadSummary]:
         """The user's own conversations in a project, newest activity first; empty ones skipped."""
         ...
 
-    def get(self, thread_id: str) -> ThreadRecord | None: ...
+    def get(self, thread_id: str) -> ThreadRecord | None:
+        """Return the thread, or None when it does not exist."""
+        ...
 
     def messages(self, thread_id: str) -> list[MessageRecord]:
         """Every turn of a thread, oldest first; the caller has already checked access."""
         ...
 
-    def get_message(self, message_id: str) -> tuple[ThreadRecord, MessageRecord] | None: ...
+    def get_message(self, message_id: str) -> tuple[ThreadRecord, MessageRecord] | None:
+        """Return a message with its thread, or None when it does not exist."""
+        ...

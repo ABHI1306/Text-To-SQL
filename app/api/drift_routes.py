@@ -38,6 +38,7 @@ EditMdlContext = Annotated[AuthContext, Depends(require_capability("edit_mdl"))]
 
 @lru_cache
 def get_drift_repository() -> PostgresDriftRepository:
+    """Return the cached drift repository; 503 when no metadata database is set."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(status_code=503, detail="Metadata database is not configured")
@@ -46,6 +47,7 @@ def get_drift_repository() -> PostgresDriftRepository:
 
 @lru_cache
 def get_job_store() -> PostgresJobStore:
+    """Return the cached scheduler job store; 503 when no metadata database is set."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(status_code=503, detail="Metadata database is not configured")
@@ -57,6 +59,7 @@ JobStoreDependency = Annotated[JobStorePort, Depends(get_job_store)]
 
 
 class ScheduleRequest(BaseModel):
+    """Body for a profiling schedule: a cron expression and a timezone."""
     model_config = ConfigDict(extra="forbid")
 
     schedule: str = Field(min_length=9, max_length=100, description="Five-field cron expression")
@@ -64,6 +67,7 @@ class ScheduleRequest(BaseModel):
 
 
 def _job_json(job: ScheduledJob) -> dict[str, object]:
+    """Serialise a scheduled job into its camelCase API shape."""
     return {
         "id": job.id,
         "projectId": job.project_id,
@@ -80,6 +84,7 @@ def _job_json(job: ScheduledJob) -> dict[str, object]:
 
 
 def _report_json(report: StoredDriftReport) -> dict[str, object]:
+    """Serialise a stored drift report into its camelCase API shape."""
     return {
         "id": report.id,
         "projectId": report.project_id,
@@ -97,6 +102,7 @@ def _report_json(report: StoredDriftReport) -> dict[str, object]:
 def get_profiling_schedule(
     project_id: UUID, context: ManageProfilingContext, jobs: JobStoreDependency
 ) -> dict[str, object]:
+    """Return the project's profiling schedule, or 404 when none is set."""
     require_project_access(context, project_id)
     job = jobs.get_for_project(str(project_id), JOB_KIND_PROFILE_DRIFT)
     if job is None:
@@ -143,6 +149,7 @@ def delete_profiling_schedule(
     jobs: JobStoreDependency,
     audit: AuditDependency,
 ) -> Response:
+    """Remove the project's profiling schedule (requires ``manage_profiling``)."""
     require_project_access(context, project_id)
     if not jobs.delete_for_project(str(project_id), JOB_KIND_PROFILE_DRIFT):
         raise HTTPException(status_code=404, detail="No profiling schedule is set")
@@ -158,6 +165,7 @@ def list_drift_reports(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     cursor: Annotated[datetime | None, Query(description="createdAt of the last item seen")] = None,
 ) -> dict[str, object]:
+    """List drift reports newest first, paged by ``cursor`` (``manage_profiling``)."""
     require_project_access(context, project_id)
     items = reports.list_reports(str(project_id), limit=limit, before=cursor)
     return {

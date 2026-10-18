@@ -1,3 +1,5 @@
+"""Runtime settings read from environment variables."""
+
 import os
 from dataclasses import dataclass
 
@@ -6,6 +8,7 @@ from cryptography.fernet import Fernet
 
 @dataclass(frozen=True)
 class Settings:
+    """Immutable runtime configuration; every field comes from an environment variable."""
     app_env: str
     log_level: str
     ollama_url: str
@@ -57,6 +60,7 @@ class Settings:
 
 
 def get_settings() -> Settings:
+    """Read the environment into ``Settings``, applying the defaults."""
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -118,6 +122,7 @@ def get_settings() -> Settings:
 
 
 def validate_runtime_secrets(settings: Settings) -> None:
+    """Outside development and test, require a long JWT secret and a valid Fernet key."""
     if settings.app_env.lower() in {"development", "test"}:
         return
     if len(settings.jwt_secret) < 32:

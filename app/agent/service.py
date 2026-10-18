@@ -31,12 +31,14 @@ from app.semantic.runner import compile_for, execute_compiled, failure_from
 
 @dataclass(frozen=True)
 class AskEvent:
+    """One event in the ordered stream of a run (``type`` plus its ``data``)."""
     type: str
     data: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class AskResult:
+    """A finished run collected from its events, for callers that do not stream."""
     ok: bool
     logical_sql: str | None
     sql: str | None
@@ -74,6 +76,7 @@ class AskService:
         knowledge: KnowledgeLookup | None = None,
         retrieval_cache: RetrievalCache | None = None,
     ) -> None:
+        """Build retrieval from the ports and keep the models, warehouse and optional stores."""
         self._retrieval = RetrievalService(
             embedder, vector_store, knowledge=knowledge, cache=retrieval_cache
         )
@@ -216,6 +219,7 @@ class AskService:
         include_compiled: bool = False,
         thread_id: str | None = None,
     ) -> AskResult:
+        """Run a question to completion and collect the events into an ``AskResult``."""
         state: dict[str, Any] = {}
         events = list(
             self.stream(
@@ -364,6 +368,7 @@ class AskService:
         state: Mapping[str, Any],
         failure: StructuredFailure | None,
     ) -> None:
+        """Audit the question (truncated) and any row-policy attribute that was missing."""
         if self._audit is None:
             return
         self._audit.record(
@@ -392,6 +397,7 @@ class AskService:
 
 
 def _issues(errors: Sequence[CompileError]) -> list[JsonValue]:
+    """Compile errors as JSON-safe dicts for events."""
     return [
         {
             "code": error.code.value,
@@ -413,6 +419,7 @@ SUGGESTIONS_SCHEMA: dict[str, Any] = {
 
 
 def build_suggestions_prompt(question: str, columns: Sequence[str]) -> str:
+    """Prompt asking for up to three follow-up questions from the result columns."""
     return (
         "A user just asked a data question and got an answer. Suggest up to 3 short follow-up"
         " questions they might ask next, using only these result columns for ideas.\n"
@@ -422,6 +429,7 @@ def build_suggestions_prompt(question: str, columns: Sequence[str]) -> str:
 
 
 def _issue_text(errors: object) -> str:
+    """Join event error dicts into one line of ``E_<code> message`` text."""
     items = errors if isinstance(errors, list) else []
     return "; ".join(
         f"E_{item.get('code')} {item.get('message', '')}".strip()
@@ -435,6 +443,7 @@ def trace_from_events(events: Sequence[AskEvent]) -> dict[str, Any]:
     models: list[str] = []
 
     def add(title: str, detail: str, ok: bool, event: AskEvent) -> None:
+        """Append one timeline step."""
         steps.append({"title": title, "detail": detail, "ok": ok, "ms": int(event.data.get("ms", 0))})
 
     for event in events:
@@ -485,6 +494,7 @@ def _contract_event(event: AskEvent, state: Mapping[str, Any]) -> AskEvent | Non
 def _events(
     node: str, change: Mapping[str, Any], state: Mapping[str, Any], include_compiled: bool
 ) -> Iterator[AskEvent]:
+    """The events one graph node update yields, in order (empty when it yields none)."""
     if node == "rewrite_followup" and state.get("history"):
         yield AskEvent("rewrite", {"question": change.get("standalone_question", "")})
     elif node == "classify_intent" and change.get("intent"):

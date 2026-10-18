@@ -1,3 +1,5 @@
+"""Plain data types for authenticated users, their request context and login results."""
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -6,6 +8,7 @@ from app.core.types import JsonValue, Principal
 
 @dataclass(frozen=True)
 class AuthUser:
+    """A stored account as the login path sees it, including lock state and password hash."""
     user_id: str
     username: str
     role_name: str
@@ -18,6 +21,7 @@ class AuthUser:
 
 @dataclass(frozen=True)
 class AuthContext:
+    """The authenticated caller on one request: role, capabilities and project access."""
     user_id: str
     username: str
     role_name: str
@@ -30,6 +34,7 @@ class AuthContext:
 
 @dataclass(frozen=True)
 class LoginResult:
+    """Tokens and caller context returned by a successful login or refresh."""
     access_token: str
     refresh_token: str
     user: AuthContext

@@ -27,6 +27,7 @@ from app.domain.policy import RowPolicy
 
 @dataclass
 class CliContext:
+    """Everything one CLI question needs: service, project, model, principal and policies."""
     service: AskService
     close: Any
     project_id: str
@@ -94,6 +95,7 @@ def open_context(project_id: str, username: str, *, audit: bool = True) -> CliCo
 
 
 def ask(context: CliContext, question: str, *, include_compiled: bool) -> AskResult:
+    """Ask one question through the full pipeline as the context's account."""
     return context.service.ask(
         context.project_id,
         context.version,
@@ -106,6 +108,7 @@ def ask(context: CliContext, question: str, *, include_compiled: bool) -> AskRes
 
 
 def _print_table(columns: list[str], rows: list[list[Any]]) -> None:
+    """Print columns and rows as a left-aligned plain-text table."""
     widths = [
         max([len(column)] + [len(str(row[i])) for row in rows]) for i, column in enumerate(columns)
     ]
@@ -116,6 +119,7 @@ def _print_table(columns: list[str], rows: list[list[Any]]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse arguments, ask and print the result; returns the exit code (2 on setup errors)."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("question")
     parser.add_argument("--project-id", required=True)

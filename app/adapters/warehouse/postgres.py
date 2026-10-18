@@ -1,3 +1,5 @@
+"""PostgreSQL warehouse adapter that runs validated queries in read-only transactions."""
+
 from collections.abc import Generator
 from contextlib import contextmanager
 from tempfile import NamedTemporaryFile
@@ -16,6 +18,7 @@ class UnsafeWarehouseQuery(ValueError):
 
 
 class PostgresWarehouseAdapter:
+    """Executes compiler-validated SELECTs read-only, with a timeout and a row cap."""
     def __init__(
         self,
         dsn: str,
@@ -25,6 +28,7 @@ class PostgresWarehouseAdapter:
         ssl_ca_certificate: str | None = None,
         pool_max_size: int = 0,
     ) -> None:
+        """Validate the DSN and limits and store the connection settings."""
         if not dsn:
             raise ValueError("A warehouse DSN is required")
         if statement_timeout_ms <= 0:
@@ -39,6 +43,7 @@ class PostgresWarehouseAdapter:
 
     @contextmanager
     def _connect(self) -> Generator[psycopg.Connection[tuple[object, ...]], None, None]:
+        """Yield a pooled or direct connection (temporary CA file when one is configured)."""
         if self._ssl_ca_certificate is None:
             pool = get_pool(self._dsn, self._pool_max_size)
             if pool is not None:
@@ -59,6 +64,7 @@ class PostgresWarehouseAdapter:
 
     @staticmethod
     def _ensure_read_only_select(sql: str) -> None:
+        """Defence in depth: allow only one SELECT with no writes, INTO or locks."""
         try:
             statements = parse(sql, read="postgres")
         except ParseError as error:
@@ -84,6 +90,7 @@ class PostgresWarehouseAdapter:
         *,
         max_rows: int,
     ) -> QueryResult:
+        """Run the query read-only with a statement timeout, fetching at most ``max_rows`` rows."""
         if max_rows <= 0 or max_rows > self._max_rows:
             raise ValueError(f"max_rows must be between 1 and {self._max_rows}")
         # Query text is psycopg pyformat: a literal % is written %%, which only the driver reads.
@@ -104,6 +111,7 @@ class PostgresWarehouseAdapter:
         return QueryResult(columns=columns, rows=rows, truncated=truncated)
 
     def explain(self, query: ValidatedQuery) -> None:
+        """Run ``EXPLAIN`` read-only to prove the query plans, without executing it."""
         self._ensure_read_only_select(query.sql.replace("%%", "%"))
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")

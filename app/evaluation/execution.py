@@ -48,19 +48,24 @@ _STAGE_BY_CODE = {
 class EvalBackend(Protocol):
     """What a run needs from the running system, for one account and project."""
 
-    def ask(self, question: str) -> AskResult: ...
+    def ask(self, question: str) -> AskResult:
+        """Ask ``question`` end to end and return the full result."""
+        ...
 
     def reference_rows(self, logical_sql: str) -> list[list[Any]] | str:
         """Rows of a reference query through the same compiler, or a reason it cannot run."""
         ...
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Release any resources held for this run."""
+        ...
 
 
 BackendFactory = Callable[[str, str], EvalBackend]  # (project_id, user_id) -> backend
 
 
 def _cell(value: Any) -> str:
+    """Render a result cell as text so equal values compare equal (numbers to 2 places)."""
     if isinstance(value, (Decimal, float)):
         return f"{float(value):.2f}"
     if isinstance(value, (date, datetime)):
@@ -74,6 +79,7 @@ def normalized_rows(rows: Sequence[Sequence[Any]]) -> list[tuple[str, ...]]:
 
 
 def stage_of(code: str | None) -> str:
+    """Map a failure code to the pipeline stage it points at, or ``other``."""
     return _STAGE_BY_CODE.get(code or "", "other")
 
 
@@ -95,11 +101,13 @@ def load_cases(include_draft: bool = True) -> tuple[list[dict[str, Any]], int]:
 
 
 def _percentile(values: list[float], q: float) -> float:
+    """The ``q`` quantile (0 to 1) of ``values`` by nearest rank; 0.0 when empty."""
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, round(q * (len(ordered) - 1)))] if ordered else 0.0
 
 
 class EvalService:
+    """Runs the golden set in a background thread and stores per-case results and a summary."""
     def __init__(
         self,
         store: CollabStorePort,
@@ -109,6 +117,7 @@ class EvalService:
         cases: Callable[[], tuple[list[dict[str, Any]], int]] = load_cases,
         spawn: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
+        """Store the collaborators; ``cases`` and ``spawn`` are injectable for tests."""
         self._store = store
         self._backend_for = backend_for
         self._audit = audit
@@ -117,9 +126,11 @@ class EvalService:
 
     @staticmethod
     def _thread(work: Callable[[], None]) -> None:
+        """Default ``spawn``: run the work on a daemon thread."""
         threading.Thread(target=work, daemon=True, name="eval-run").start()
 
     def start(self, project_id: str, user_id: str, idempotency_key: str) -> tuple[Record, bool]:
+        """Create (or find, by idempotency key) a run and start it; returns run and created flag."""
         run, created = self._store.create_eval_run(project_id, user_id, idempotency_key)
         if created:
             self._audit.record(user_id, "eval_run_started", "project", project_id,
@@ -128,6 +139,7 @@ class EvalService:
         return run, created
 
     def _execute(self, run_id: str, project_id: str, user_id: str) -> None:
+        """Run every case and finish the run as completed or failed; always closes the backend."""
         try:
             backend = self._backend_for(project_id, user_id)
         except Exception as error:  # noqa: BLE001 - recorded on the run
@@ -145,6 +157,7 @@ class EvalService:
                                {"run_id": run_id})
 
     def _run_case(self, run_id: str, backend: EvalBackend, case: dict[str, Any]) -> Record:
+        """Ask one case, compare rows with the reference, store and return the result."""
         expected = backend.reference_rows(case["reference_logical_sql"])
         started = time.monotonic()
         answer = backend.ask(case["question"])
@@ -170,6 +183,7 @@ class EvalService:
 
     @staticmethod
     def _summarize(results: list[Record], unmeasured: int) -> Record:
+        """Aggregate case results into accuracy, failures by stage and latency percentiles."""
         scored = [r for r in results if r["outcome"] != "reference_invalid"]
         correct = [r for r in scored if r["outcome"] == "correct"]
         latencies = [r["latency_ms"] / 1000 for r in scored]
@@ -190,6 +204,7 @@ class EvalService:
         }
 
     def report(self, run_id: str) -> Record | None:
+        """Build a run's report with its results and a diff against the previous run."""
         run = self._store.get_eval_run(run_id)
         if run is None:
             return None
@@ -198,6 +213,7 @@ class EvalService:
         return {"run": run, "results": results, "diff": self._diff(results, previous)}
 
     def _diff(self, results: list[Record], previous: Record | None) -> Record:
+        """Compare outcomes with the previous run: regressions, fixes and unchanged counts."""
         if previous is None:
             return {"previous_run_id": None, "regressions": [], "fixes": [], "unchanged": len(results)}
         before = {r["case_id"]: r["outcome"] for r in self._store.list_eval_results(str(previous["id"]))}
@@ -217,6 +233,7 @@ class EvalService:
 
 
 def render_markdown(report: Record) -> str:
+    """Render a run report as Markdown."""
     run, results, diff = report["run"], report["results"], report["diff"]
     summary = run.get("summary") or {}
     lines = [

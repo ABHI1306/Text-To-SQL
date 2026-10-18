@@ -45,6 +45,7 @@ _UNAVAILABLE = {"LLM_UNAVAILABLE"}
 
 
 class AskQuestionRequest(BaseModel):
+    """Body for a question: the text and an optional thread to continue."""
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
@@ -52,9 +53,11 @@ class AskQuestionRequest(BaseModel):
 
 
 class _Prepared:
+    """A ready-to-run ask service bound to a project's deployed MDL and warehouse."""
     def __init__(
         self, service: AskService, mdl: Mdl, version: int, close: Callable[[], None]
     ) -> None:
+        """Hold the service, deployed MDL, its version and the cleanup callback."""
         self.service = service
         self.mdl = mdl
         self.version = version
@@ -62,6 +65,7 @@ class _Prepared:
 
 
 def _principal(context: AuthContext) -> Principal:
+    """Convert the authenticated context into the ``Principal`` the compiler enforces."""
     return Principal(
         user_id=context.user_id,
         role_name=context.role_name,
@@ -76,6 +80,7 @@ def _prepare(
     repository: PostgresMetadataRepository,
     audit: AuditService,
 ) -> _Prepared:
+    """Load the deployed MDL and build an ask service; 409 when nothing is deployed."""
     from app.api.routes import _project_connection_details
 
     try:
@@ -95,6 +100,7 @@ def _prepare(
 
 
 def _sse(event: AskEvent) -> str:
+    """Format one agent event as a server-sent-events frame."""
     return f"event: {event.type}\ndata: {json.dumps(event.data, default=str)}\n\n"
 
 
@@ -119,6 +125,11 @@ def ask_project_question(
     audit: AuditDependency,
     threads: ThreadsDependency,
 ) -> dict[str, Any]:
+    """Answer a question with SQL and rows (requires ``ask_question``).
+
+    The SQL is generated, compiled with the caller's row policies and validated before it runs.
+    Compiled ``sql`` is returned only to callers holding ``rerun_sql``.
+    """
     require_project_access(context, project_id)
     _check_thread(threads, context, project_id, body.thread_id)
     prepared = _prepare(project_id, repository, audit)
@@ -187,6 +198,7 @@ def ask_project_question_stream(
     include_compiled = "rerun_sql" in context.capabilities
 
     def events() -> Iterator[str]:
+        """Yield SSE frames for the question, always closing the service; fail closed on error."""
         try:
             yield from (
                 _sse(event)

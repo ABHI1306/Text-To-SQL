@@ -19,6 +19,7 @@ from app.config import Settings
 def warehouse_connection(
     repository: PostgresMetadataRepository, settings: Settings, project_id: str
 ) -> tuple[str, str | None]:
+    """Build the libpq DSN and optional CA certificate from a project's saved connection."""
     project = repository.get_project_connection(project_id)
     if project is None:
         raise Invalid("Project does not exist")
@@ -44,7 +45,9 @@ def runtime_factory(
     governance: PostgresGovernanceRepository,
     settings: Settings,
 ) -> RuntimeFactory:
+    """Return a ``RuntimeFactory`` that loads the deployed model, policies and warehouse."""
     def build(project_id: str) -> ProjectRuntime:
+        """Assemble the ``ProjectRuntime`` for ``project_id`` (``Invalid`` if undeployed)."""
         try:
             version, mdl = load_deployed_mdl(repository, project_id)
         except LookupError as error:

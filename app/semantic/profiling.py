@@ -1,3 +1,5 @@
+"""Profile selected catalog tables into a draft semantic model with relationship suggestions."""
+
 import json
 import re
 import time
@@ -20,6 +22,7 @@ from app.ports.llm import LLMPort
 
 
 class TableSample(BaseModel):
+    """Row count and sample rows of one profiled table."""
     schema_name: str
     table_name: str
     row_count: int
@@ -27,12 +30,14 @@ class TableSample(BaseModel):
 
 
 class ProfilingSummary(BaseModel):
+    """Totals for a profiling run and the models that need human review."""
     selected_tables: int
     total_rows: int
     models_needing_review: list[str]
 
 
 class ProfiledDraft(BaseModel):
+    """A draft MDL with the table samples and summary it was built from."""
     mdl: Mdl
     tables: list[TableSample]
     summary: ProfilingSummary
@@ -40,17 +45,21 @@ class ProfiledDraft(BaseModel):
 
 @dataclass(frozen=True)
 class _ModelMapping:
+    """Links a logical model name to its table profile and physical-to-logical column names."""
     logical_name: str
     profile: CatalogTableProfile
     physical_to_logical_column: dict[str, str]
 
 
 class ProfilingService:
+    """Builds draft models from catalog profiles and drafts descriptions with a local LLM."""
     def __init__(self, catalog: CatalogPort, llm: LLMPort | None = None) -> None:
+        """Set the catalog and the optional description model."""
         self._catalog = catalog
         self._llm = llm
 
     def list_tables(self, schemas: tuple[str, ...] = ()) -> tuple[CatalogTable, ...]:
+        """Tables available in ``schemas`` (all when empty)."""
         return self._catalog.list_tables(schemas)
 
     def create_draft(
@@ -59,6 +68,7 @@ class ProfilingService:
         *,
         sample_limit: int = 3,
     ) -> ProfiledDraft:
+        """Profile the unique ``tables`` and return a validated draft MDL with relationships."""
         if not tables:
             raise ValueError("Select at least one table to profile")
         if len(set(tables)) != len(tables):
@@ -104,6 +114,11 @@ class ProfilingService:
         )
 
     def draft_descriptions(self, mdl: Mdl) -> Mdl:
+        """Fill in descriptions from the LLM, using names and types only (never row data).
+
+        The reply must cover exactly the requested models and columns; anything else raises. All
+        generated text is flagged ``needs_review``.
+        """
         if self._llm is None:
             raise RuntimeError("Local description model is not configured")
         input_schema = [
@@ -211,6 +226,7 @@ class ProfilingService:
         self,
         profiles: tuple[CatalogTableProfile, ...],
     ) -> list[_ModelMapping]:
+        """Pick unique logical model and column names for each profile."""
         use_schema_prefix = len({profile.table.table_name for profile in profiles}) != len(profiles)
         used_model_names: set[str] = set()
         mappings: list[_ModelMapping] = []
@@ -232,6 +248,7 @@ class ProfilingService:
 
     @staticmethod
     def _to_mdl_model(mapping: _ModelMapping) -> MdlModel:
+        """Build the MDL model for a mapping; the key is set for a single-column PK."""
         profile = mapping.profile
         columns = [
             MdlColumn(
@@ -264,6 +281,7 @@ class ProfilingService:
     def _suggest_relationships(
         mappings: list[_ModelMapping],
     ) -> list[Relationship]:
+        """Suggest relationships from foreign keys, then from ``*_id`` columns named like a PK."""
         model_by_physical_table = {
             (mapping.profile.table.schema_name, mapping.profile.table.table_name): mapping
             for mapping in mappings
@@ -363,6 +381,7 @@ class ProfilingService:
 
 
 def _safe_name(value: str) -> str:
+    """Lowercase identifier made of letters, digits and underscores, starting with a letter."""
     normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower()
     if not normalized or not normalized[0].isalpha():
         normalized = f"model_{normalized}" if normalized else "model"
@@ -372,6 +391,7 @@ def _safe_name(value: str) -> str:
 
 
 def _unique_name(base: str, used: set[str]) -> str:
+    """``base`` or ``base_N`` not in ``used``; the chosen name is added to ``used``."""
     candidate = base
     suffix = 2
     while candidate in used:

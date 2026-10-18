@@ -1,3 +1,5 @@
+"""Ports and value types for password, directory and federated (OIDC) identity."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -9,16 +11,21 @@ from app.core.types import JsonValue, Principal
 
 
 class IdentityPort(Protocol):
+    """Resolves who a caller is as a ``Principal``."""
     def authenticate_password(
         self, username: str, password: str
-    ) -> Principal | None: ...
+    ) -> Principal | None:
+        """Return the principal for a correct username and password, else None."""
+        ...
 
     def resolve_external_identity(
         self,
         provider: str,
         subject: str,
         claims: Mapping[str, JsonValue],
-    ) -> Principal: ...
+    ) -> Principal:
+        """Map an already verified external identity to a local ``Principal``."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -46,6 +53,7 @@ class IdentityRejected(ValueError):
 
 @dataclass(frozen=True)
 class AuthorizationRequest:
+    """What the browser needs to start a redirect login; the other fields are kept to finish it."""
     url: str
     state: str
     nonce: str
@@ -57,7 +65,9 @@ class FederatedIdentityPort(Protocol):
 
     source: str
 
-    def begin(self) -> AuthorizationRequest: ...
+    def begin(self) -> AuthorizationRequest:
+        """Start a login and return the redirect URL with its state, nonce and PKCE verifier."""
+        ...
 
     def complete(self, *, code: str, nonce: str, code_verifier: str) -> VerifiedIdentity:
         """Exchange the code and validate the result.

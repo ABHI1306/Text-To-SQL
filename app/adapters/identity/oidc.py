@@ -43,6 +43,7 @@ _MAX_USERNAME_LENGTH = 128
 
 @dataclass(frozen=True)
 class OidcConfig:
+    """OIDC client settings; ``https`` is required unless ``allow_insecure`` is set."""
     issuer: str
     client_id: str
     redirect_uri: str
@@ -57,6 +58,7 @@ class OidcConfig:
     timeout_seconds: float = 5.0
 
     def __post_init__(self) -> None:
+        """Reject missing fields, scopes without ``openid`` and non-https URLs."""
         if not self.issuer or not self.client_id or not self.redirect_uri:
             raise ValueError("OIDC issuer, client id and redirect URI are required")
         if "openid" not in self.scopes:
@@ -70,6 +72,7 @@ class OidcConfig:
 
 @dataclass
 class _Metadata:
+    """The discovery endpoints needed for login, with the time they were fetched."""
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
@@ -77,6 +80,7 @@ class _Metadata:
 
 
 class OidcProvider:
+    """OIDC authorization-code-with-PKCE login that validates the ID token strictly."""
     source = "oidc"
 
     def __init__(
@@ -85,6 +89,7 @@ class OidcProvider:
         *,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        """Store the config and optional HTTP transport; discovery and keys load lazily."""
         self._config = config
         self._transport = transport
         self._lock = threading.Lock()
@@ -95,6 +100,7 @@ class OidcProvider:
     # ---- discovery and keys -------------------------------------------------------------
 
     def _http(self) -> httpx.Client:
+        """Return an HTTP client with a timeout that never follows redirects."""
         return httpx.Client(
             transport=self._transport,
             timeout=self._config.timeout_seconds,
@@ -102,6 +108,7 @@ class OidcProvider:
         )
 
     def _discover(self) -> _Metadata:
+        """Fetch or reuse (cached) the discovery document, checking its issuer matches."""
         with self._lock:
             cached = self._metadata
             if cached is not None and time.monotonic() - cached.fetched_at < _METADATA_TTL_SECONDS:
@@ -126,6 +133,7 @@ class OidcProvider:
         return metadata
 
     def _get_json(self, url: str) -> dict[str, Any]:
+        """GET a JSON object, mapping transport and shape errors to ``IdentityUnavailable``."""
         try:
             with self._http() as client:
                 response = client.get(url, headers={"Accept": "application/json"})
@@ -138,6 +146,7 @@ class OidcProvider:
         return body
 
     def _key_set(self, *, force: bool = False) -> KeySet:
+        """Return the cached JWKS, refetching on force but rate-limited to avoid fetch floods."""
         with self._lock:
             keys = self._keys
             age = time.monotonic() - self._keys_fetched_at
@@ -158,6 +167,7 @@ class OidcProvider:
     # ---- the flow -------------------------------------------------------------------------
 
     def _client(self) -> OAuth2Client:
+        """Build the Authlib client configured for PKCE (S256) and the client auth method."""
         return OAuth2Client(
             client_id=self._config.client_id,
             client_secret=self._config.client_secret or None,
@@ -170,6 +180,7 @@ class OidcProvider:
         )
 
     def begin(self) -> AuthorizationRequest:
+        """Start a login: generate state, nonce and PKCE verifier and the redirect URL."""
         metadata = self._discover()
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
@@ -218,6 +229,7 @@ class OidcProvider:
         return body
 
     def complete(self, *, code: str, nonce: str, code_verifier: str) -> VerifiedIdentity:
+        """Exchange the code, validate the ID token and return the verified identity."""
         if not code or not nonce or not code_verifier:
             raise IdentityRejected("missing authorization code")
         metadata = self._discover()
@@ -231,6 +243,7 @@ class OidcProvider:
     # ---- validation -----------------------------------------------------------------------
 
     def _validated_claims(self, id_token: str, nonce: str) -> Mapping[str, Any]:
+        """Verify signature (keys refreshed once), ``iss``, ``exp``, audience, ``azp``, nonce."""
         try:
             decoded = self._decode(id_token, self._key_set())
         except JoseError:
@@ -265,12 +278,14 @@ class OidcProvider:
         return claims
 
     def _decode(self, id_token: str, keys: KeySet) -> jwt.Token:
+        """Decode the ID token against the key set, allowing asymmetric algorithms only."""
         try:
             return jwt.decode(id_token, keys, algorithms=list(_ASYMMETRIC_ALGORITHMS))
         except (ValueError, TypeError, KeyError) as error:
             raise IdentityRejected("ID token is malformed") from error
 
     def _identity(self, claims: Mapping[str, Any]) -> VerifiedIdentity:
+        """Build the identity from claims: username, groups and mapped attributes."""
         raw_username = _claim(claims, self._config.username_claim)
         username = str(raw_username).strip().casefold() if isinstance(raw_username, str) else ""
         if not username or len(username) > _MAX_USERNAME_LENGTH or any(
@@ -306,6 +321,7 @@ def _claim(claims: Mapping[str, Any], path: str) -> Any:
 
 
 def _as_list(raw: Any) -> list[Any]:
+    """Wrap a claim value in a list (``None`` becomes empty)."""
     if raw is None:
         return []
     return list(raw) if isinstance(raw, (list, tuple)) else [raw]

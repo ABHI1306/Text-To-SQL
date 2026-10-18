@@ -1,3 +1,5 @@
+"""FastAPI application: validates secrets, configures logging and mounts every router."""
+
 from fastapi import FastAPI
 
 from app.api.admin_routes import router as admin_router
@@ -59,4 +61,5 @@ app.include_router(health_router)
 
 @app.get("/health", tags=["Health"])
 def health() -> dict[str, str]:
+    """Liveness probe: always ``ok`` while the process serves requests."""
     return {"status": "ok"}

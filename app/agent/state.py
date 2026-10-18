@@ -1,3 +1,5 @@
+"""State carried through the question graph, and the typed failure that ends a run."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -20,6 +22,7 @@ class StructuredFailure:
 
 
 class AgentState(TypedDict, total=False):
+    """The graph's shared state; each node returns only the keys it changes."""
     project_id: str
     thread_id: str
     principal: Principal

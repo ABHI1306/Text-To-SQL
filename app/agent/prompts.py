@@ -18,6 +18,7 @@ PROMPT_VERSION = "sql-v1"
 
 
 class SQLCandidate(BaseModel):
+    """The model's structured answer: one logical SELECT."""
     logical_sql: str = Field(description="One PostgreSQL SELECT over the logical models")
 
 
@@ -64,6 +65,7 @@ def render_knowledge(instructions: Sequence[str], pairs: Sequence[tuple[str, str
 
 
 def build_generation_prompt(question: str, context_text: str, knowledge_text: str = "") -> str:
+    """Prompt for the first SQL attempt; the question is delimited as untrusted data."""
     return (
         f"{_RULES}\n\nJSON schema of the answer: {_SCHEMA_TEXT}\n\n"
         f"MODELS:\n{context_text}\n\n{knowledge_text}"
@@ -79,6 +81,7 @@ def build_correction_prompt(
     allowed_names: Mapping[str, Sequence[str]],
     knowledge_text: str = "",
 ) -> str:
+    """Prompt that shows the rejected SQL, the typed errors and the allowed names."""
     quoted = "\n".join(
         f"- {error.code.value}: {error.message}"
         + (f" (identifier: {error.identifier})" if error.identifier else "")
@@ -98,6 +101,7 @@ def build_correction_prompt(
 
 
 def build_repair_prompt(raw_response: str) -> str:
+    """Prompt asking the model to re-send its last reply as valid JSON."""
     return (
         f"{_RULES}\n\nJSON schema of the answer: {_SCHEMA_TEXT}\n\n"
         "Your last reply was not valid JSON for that schema. Reply again with only the JSON "
@@ -109,10 +113,12 @@ INTENTS = ("data_question", "clarify", "respond")
 
 
 class RewrittenQuestion(BaseModel):
+    """The model's structured answer to a follow-up rewrite."""
     question: str = Field(description="The user's latest message as one standalone question")
 
 
 class IntentDecision(BaseModel):
+    """The model's routing choice, with the clarifying question or reply when needed."""
     intent: Literal["data_question", "clarify", "respond"]
     message: str = Field(
         default="",
@@ -184,10 +190,12 @@ Examples (for illustration only):
 
 
 def _turns(turns: Sequence[tuple[str, str | None]]) -> str:
+    """History turns as JSON with ``<`` escaped so they cannot close a delimiter."""
     return json.dumps([{"user": q, "ran": sql} for q, sql in turns]).replace("<", "\\u003c")
 
 
 def build_rewrite_prompt(question: str, turns: Sequence[tuple[str, str | None]]) -> str:
+    """Prompt that turns a follow-up message into a standalone question."""
     return (
         f"{_REWRITE_RULES}\n\nJSON schema of the answer: "
         f"{json.dumps(REWRITE_SCHEMA, separators=(',', ':'), sort_keys=True)}\n\n"
@@ -197,6 +205,7 @@ def build_rewrite_prompt(question: str, turns: Sequence[tuple[str, str | None]])
 
 
 def build_intent_prompt(question: str, model_names: Sequence[str]) -> str:
+    """Prompt that routes a message to data question, clarify or respond."""
     return (
         f"{_INTENT_RULES}\n\nJSON schema of the answer: "
         f"{json.dumps(INTENT_SCHEMA, separators=(',', ':'), sort_keys=True)}\n\n"
@@ -206,10 +215,12 @@ def build_intent_prompt(question: str, model_names: Sequence[str]) -> str:
 
 
 class SummaryDecision(BaseModel):
+    """The model's structured result summary."""
     summary: str = Field(description="One to three plain sentences describing the rows")
 
 
 class ChartDecision(BaseModel):
+    """The model's structured chart proposal (unvalidated), or None."""
     chart: dict[str, object] | None = Field(
         default=None, description="A Vega-Lite spec without data, or null when no chart helps"
     )
@@ -238,6 +249,7 @@ Rules:
 
 
 def _sample(columns: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
+    """At most ``SAMPLE_ROWS`` rows as JSON with ``<`` and ``>`` escaped."""
     shown = [[_cell(cell) for cell in row] for row in rows[:SAMPLE_ROWS]]
     return json.dumps({"columns": list(columns), "rows": shown}).replace("<", "\\u003c").replace(
         ">", "\\u003e"
@@ -245,6 +257,7 @@ def _sample(columns: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
 
 
 def _cell(value: object) -> object:
+    """A JSON-safe cell: scalars as-is, anything else as text cut to 80 characters."""
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return str(value)[:80]
@@ -253,6 +266,7 @@ def _cell(value: object) -> object:
 def build_summary_prompt(
     question: str, columns: Sequence[str], rows: Sequence[Sequence[object]]
 ) -> str:
+    """Prompt asking for a short summary grounded in a sample of the rows."""
     return (
         f"{_SUMMARY_RULES}\n\nJSON schema of the answer: "
         f"{json.dumps(SUMMARY_SCHEMA, separators=(',', ':'), sort_keys=True)}\n\n"
@@ -265,6 +279,7 @@ def build_summary_prompt(
 def build_chart_prompt(
     question: str, columns: Sequence[str], rows: Sequence[Sequence[object]]
 ) -> str:
+    """Prompt asking for a data-free Vega-Lite spec over the result columns."""
     return (
         f"{_CHART_RULES}\n\nJSON schema of the answer: "
         f"{json.dumps(CHART_SCHEMA, separators=(',', ':'), sort_keys=True)}\n\n"

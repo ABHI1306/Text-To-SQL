@@ -39,6 +39,7 @@ def usage(_context: ViewOps) -> dict[str, object]:
 
 @router.get("/ops/scheduler")
 def scheduler_health(_context: ViewOps) -> dict[str, Any]:
+    """Report scheduler job health; degraded when jobs are overdue or stale."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise HTTPException(status_code=503, detail="Metadata database is not configured")

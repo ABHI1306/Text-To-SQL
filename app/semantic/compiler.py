@@ -60,6 +60,7 @@ DISALLOWED_FUNCTIONS = frozenset(
 
 
 class CompileErrorCode(StrEnum):
+    """Stable machine-readable codes for every way compilation or validation fails."""
     NON_SELECT = "NON_SELECT"
     SYNTAX_ERROR = "SYNTAX_ERROR"
     UNKNOWN_MODEL = "UNKNOWN_MODEL"
@@ -73,6 +74,7 @@ class CompileErrorCode(StrEnum):
 
 @dataclass(frozen=True)
 class CompileError:
+    """One compile or validation failure, with the offending name and close-match hints."""
     code: CompileErrorCode
     message: str
     identifier: str | None = None
@@ -81,6 +83,7 @@ class CompileError:
 
 @dataclass(frozen=True)
 class CompiledQuery:
+    """Compiler output: executable SQL and its bind parameters, or the errors."""
     sql: str
     parameters: Mapping[str, JsonValue] = field(default_factory=dict)
     policy_context: str = ""
@@ -91,11 +94,14 @@ class CompiledQuery:
 
     @property
     def ok(self) -> bool:
+        """True when compilation produced no errors."""
         return not self.errors
 
 
 class _Failure(Exception):
+    """Internal control-flow exception carrying the ``CompileError`` list to report."""
     def __init__(self, *errors: CompileError) -> None:
+        """Keep the errors and use the first message as the exception text."""
         super().__init__(errors[0].message)
         self.errors = errors
 
@@ -126,6 +132,7 @@ def compile_query(
 
 
 class _Compilation:
+    """One compilation run: holds the MDL, principal and policies and rewrites a query."""
     def __init__(
         self,
         mdl: Mdl,
@@ -133,6 +140,7 @@ class _Compilation:
         policies: Sequence[RowPolicy],
         default_limit: int,
     ) -> None:
+        """Index models and metrics by name and set up per-run bind state."""
         self.mdl = mdl
         self.principal = principal
         self.policies = policies
@@ -149,6 +157,7 @@ class _Compilation:
     # ------------------------------------------------------------------ pipeline
 
     def run(self, logical_sql: str) -> CompiledQuery:
+        """Run the pipeline: restrict, resolve, expand, check joins, wrap in CTEs, emit."""
         root = self._parse_and_restrict(logical_sql)
         cte_names = self._collect_cte_names(root)
         self._resolve_relations(root, cte_names)
@@ -192,6 +201,7 @@ class _Compilation:
     # -------------------------------------------------------------- 1. parse and restrict
 
     def _parse_and_restrict(self, logical_sql: str) -> exp.Expr:
+        """Parse exactly one SELECT and reject writes, DDL and forbidden nodes."""
         try:
             statements = [s for s in parse(logical_sql, read=DIALECT) if s is not None]
         except SqlglotError as error:
@@ -217,6 +227,7 @@ class _Compilation:
         return root
 
     def _reject_forbidden_nodes(self, root: exp.Expr) -> None:
+        """Raise if the tree has a write, parameter, table function or blocked function."""
         problem = find_forbidden_construct(root, allow_parameters=False)
         if problem is not None:
             raise _Failure(problem)
@@ -224,6 +235,7 @@ class _Compilation:
     # -------------------------------------------------------------- 2. resolve relations
 
     def _collect_cte_names(self, root: exp.Expr) -> set[str]:
+        """Collect user WITH names, rejecting any that shadow a model, metric or generated CTE."""
         names: set[str] = set()
         for cte in root.find_all(exp.CTE):
             name = cte.alias.lower()
@@ -244,6 +256,7 @@ class _Compilation:
         return names
 
     def _resolve_relations(self, root: exp.Expr, cte_names: set[str]) -> None:
+        """Reject any table that is schema-qualified or not a model, metric or WITH name."""
         allowed = [*self.models, *self.metrics]
         errors: list[CompileError] = []
         cte_refs = cte_reference_ids(root)
@@ -289,6 +302,7 @@ class _Compilation:
         self._prepend_ctes(root, [self._metric_cte(metric) for metric in used.values()])
 
     def _metric_cte(self, metric: Metric) -> exp.CTE:
+        """Build the grouped CTE for ``metric`` over its base model, in logical SQL."""
         if metric.base_object not in self.models:
             raise _Failure(
                 CompileError(
@@ -314,6 +328,7 @@ class _Compilation:
     # ------------------------------------------------------------- 4. column analysis
 
     def _schema(self) -> dict[str, object]:
+        """Model-to-column-type mapping used to qualify column names with sqlglot."""
         return {
             model.name: {column.name: column.type for column in model.columns}
             for model in self.models.values()
@@ -350,6 +365,7 @@ class _Compilation:
         return used
 
     def _column_failure(self, root: exp.Expr, error: OptimizeError) -> _Failure:
+        """Turn a sqlglot qualification error into an ``UNKNOWN_COLUMN`` failure with hints."""
         message = str(error)
         identifier = message.split("'")[1] if message.count("'") >= 2 else None
         candidates = sorted(
@@ -372,6 +388,7 @@ class _Compilation:
     # -------------------------------------------------------------------- 5. joins
 
     def _check_joins(self, root: exp.Expr) -> None:
+        """Check every join in every scope against the declared relationships."""
         cte_refs = cte_reference_ids(root)
         for scope in traverse_scope(root):
             select = scope.expression
@@ -386,6 +403,7 @@ class _Compilation:
     def _check_join(
         self, scope: Scope, join: exp.Join, left: list[exp.Expr], cte_refs: set[int]
     ) -> None:
+        """Allow a model join only if it matches a declared relationship; fill in a missing ON."""
         right = join.this
         right_model = self._model_of(right, cte_refs)
         if right_model is None:
@@ -458,6 +476,7 @@ class _Compilation:
         right_model: str,
         cte_refs: set[int],
     ) -> set[frozenset[tuple[str, str]]]:
+        """Column pairs equated by the join's ON or USING, as (model, column) sets."""
         alias_models = dict(left_models)
         alias_models[join.this.alias_or_name] = right_model
         pairs: set[frozenset[tuple[str, str]]] = set()
@@ -479,6 +498,7 @@ class _Compilation:
     def _resolve_pair_side(
         self, side: exp.Expr, alias_models: dict[str, str]
     ) -> tuple[str, str] | None:
+        """Resolve one side of an equality to (model, column), or None if ambiguous."""
         if not isinstance(side, exp.Column):
             return None
         if side.table:
@@ -492,6 +512,7 @@ class _Compilation:
         return (owners[0], side.name.lower()) if len(owners) == 1 else None
 
     def _model_of(self, source: exp.Expr, cte_refs: set[int]) -> str | None:
+        """Model name if ``source`` is a direct model table (not a CTE or qualified), else None."""
         if isinstance(source, exp.Table) and not source.db and id(source) not in cte_refs:
             name = _table_name(source)
             if name in self.models:
@@ -499,12 +520,14 @@ class _Compilation:
         return None
 
     def _relationship(self, left: str, right: str) -> Relationship | None:
+        """The declared relationship between two models, if any."""
         for relationship in self.relationships:
             if set(relationship.models) == {left, right}:
                 return relationship
         return None
 
     def _related_models(self, model: str) -> set[str]:
+        """Models that share a declared relationship with ``model``."""
         related: set[str] = set()
         for relationship in self.relationships:
             if model in relationship.models:
@@ -514,6 +537,7 @@ class _Compilation:
     # --------------------------------------------------- 6. model references and CTEs
 
     def _rewrite_model_references(self, root: exp.Expr, cte_names: set[str]) -> list[str]:
+        """Point each model table at its ``m_<model>`` CTE and return the models used."""
         used: dict[str, None] = {}
         cte_refs = cte_reference_ids(root)
         for table in list(root.find_all(exp.Table)):
@@ -531,6 +555,7 @@ class _Compilation:
         return list(used)
 
     def _model_cte(self, model: MdlModel, used: set[str]) -> exp.CTE:
+        """Build the ``m_<model>`` CTE: used columns plus the row-policy filters."""
         columns = [column for column in model.columns if column.name in used]
         if not columns:
             columns = [next((c for c in model.columns if not c.is_calculated), model.columns[0])]
@@ -546,6 +571,7 @@ class _Compilation:
         )
 
     def _projection(self, model: MdlModel, column: MdlColumn) -> exp.Expr:
+        """Project a column (physical or calculated) under its logical name."""
         if column.is_calculated:
             expression = self._physical_expression(model, column.expression or "", 0)
             return exp.alias_(expression, column.name)
@@ -589,6 +615,7 @@ class _Compilation:
         return parsed
 
     def _prepend_ctes(self, root: exp.Expr, ctes: list[exp.CTE]) -> None:
+        """Put ``ctes`` ahead of any existing WITH entries of ``root``."""
         if not ctes:
             return
         existing = root.args.get("with_")
@@ -600,6 +627,7 @@ class _Compilation:
     # --------------------------------------------------------------- 7. row policies
 
     def _policy_predicates(self, model: MdlModel) -> list[exp.Expr]:
+        """Predicates of the enabled policies that apply to ``model`` for the principal."""
         if self.principal is None:
             return []
         predicates: list[exp.Expr] = []
@@ -614,6 +642,11 @@ class _Compilation:
     def _render_policy(
         self, model: MdlModel, policy: RowPolicy, principal: Principal
     ) -> tuple[exp.Expr, dict[str, JsonValue | None]]:
+        """Render a policy predicate with its attributes bound as parameters.
+
+        A missing attribute yields ``FALSE`` (deny all rows) and is recorded; list attributes are
+        only allowed with ``=`` or ``IN`` and become ``= ANY(param)``.
+        """
         values: dict[str, JsonValue | None] = {
             attribute: principal.attributes.get(attribute) for attribute in policy.attributes()
         }
@@ -653,6 +686,7 @@ class _Compilation:
         return predicate, values
 
     def _parse_predicate(self, model: MdlModel, policy: RowPolicy) -> exp.Expr:
+        """Parse and validate a policy predicate for ``model``, using physical column names."""
         text = ATTRIBUTE_PLACEHOLDER.sub(lambda match: _sentinel(match.group(1)), policy.predicate)
         if "{{" in text or "}}" in text:
             raise _Failure(
@@ -709,6 +743,7 @@ class _Compilation:
         return self._physicalise(model, exp.Paren(this=parsed), sentinels)
 
     def _physicalise(self, model: MdlModel, parsed: exp.Expr, keep: set[str]) -> exp.Expr:
+        """Replace logical columns in ``parsed`` with physical ones, skipping ``keep`` sentinels."""
         by_name = {column.name: column for column in model.columns}
         for node in list(parsed.find_all(exp.Column)):
             if node.name in keep and not node.table:
@@ -727,6 +762,7 @@ class _Compilation:
         return parsed
 
     def _bind(self, attribute: str, value: JsonValue | None) -> exp.Expr:
+        """Register a bind parameter for ``attribute`` and return a placeholder token column."""
         name = f"p_{attribute}"
         self.parameters[name] = value
         token = f"__p{self.nonce}_{attribute}__"
@@ -736,6 +772,7 @@ class _Compilation:
     # ------------------------------------------------------------------- 8. emit
 
     def _emit(self, root: exp.Expr) -> str:
+        """Render the SQL, escape literal percents and swap tokens for pyformat parameters."""
         sql = root.sql(DIALECT)
         sql = sql.replace("%", "%%")
         # Longest first: one attribute's token can be a prefix of another's (a vs a__b).
@@ -744,6 +781,7 @@ class _Compilation:
         return sql
 
     def _policy_context(self) -> str:
+        """Hash of the applied policies and their values, identifying the row-security context."""
         payload = [
             {"name": policy.name, "predicate": policy.predicate, "values": values}
             for policy, values in sorted(self.applied, key=lambda item: item[0].name)
@@ -837,6 +875,7 @@ def find_forbidden_construct(root: exp.Expr, *, allow_parameters: bool) -> Compi
 
 
 def _syntax_message(error: SqlglotError) -> str:
+    """User-facing text for a sqlglot parse error, with line and column when known."""
     details = getattr(error, "errors", None) or []
     if details and isinstance(details[0], dict):
         first = details[0]
@@ -846,16 +885,19 @@ def _syntax_message(error: SqlglotError) -> str:
 
 
 def _sentinel(attribute: str) -> str:
+    """Placeholder column name standing in for a policy attribute during parsing."""
     return f"__attr_{attribute}__"
 
 
 def _function_name(node: exp.Expr) -> str:
+    """Lowercase function name of ``node`` (the call name for untyped functions)."""
     if isinstance(node, exp.Anonymous):
         return str(node.name).lower()
     return str(node.key).lower()
 
 
 def _table_name(table: exp.Table) -> str:
+    """Table name, lowercased unless it was quoted."""
     identifier = table.this
     name = identifier.name if isinstance(identifier, exp.Identifier) else str(identifier)
     quoted = isinstance(identifier, exp.Identifier) and identifier.args.get("quoted")
@@ -863,6 +905,7 @@ def _table_name(table: exp.Table) -> str:
 
 
 def _parse_expression(sql: str) -> exp.Expr:
+    """Parse ``sql`` as exactly one statement or expression, else raise a syntax failure."""
     try:
         statements = parse(sql, read=DIALECT)
     except SqlglotError as error:
@@ -873,10 +916,12 @@ def _parse_expression(sql: str) -> exp.Expr:
 
 
 def _closest(name: str, candidates: Sequence[str]) -> tuple[str, ...]:
+    """Up to three close matches for ``name`` among ``candidates``."""
     return tuple(difflib.get_close_matches(name.lower(), list(candidates), n=3, cutoff=0.5))
 
 
 def _dedupe(errors: list[CompileError]) -> list[CompileError]:
+    """Drop errors that repeat the same code and identifier, keeping order."""
     seen: set[tuple[CompileErrorCode, str | None]] = set()
     unique: list[CompileError] = []
     for error in errors:
@@ -888,6 +933,7 @@ def _dedupe(errors: list[CompileError]) -> list[CompileError]:
 
 
 def _lookup_source(scope: Scope | None, alias: str) -> object | None:
+    """Find ``alias`` in ``scope`` or the nearest enclosing scope that defines it."""
     while scope is not None:
         if alias in scope.sources:
             return scope.sources[alias]
@@ -896,6 +942,7 @@ def _lookup_source(scope: Scope | None, alias: str) -> object | None:
 
 
 def _conjuncts(condition: exp.Expr) -> list[exp.Expr]:
+    """Flatten nested AND and parentheses into a list of conditions."""
     if isinstance(condition, exp.And):
         return _conjuncts(condition.this) + _conjuncts(condition.expression)
     if isinstance(condition, exp.Paren):
@@ -904,6 +951,7 @@ def _conjuncts(condition: exp.Expr) -> list[exp.Expr]:
 
 
 def _condition_pairs(condition: str) -> set[frozenset[tuple[str, str]]]:
+    """Column equalities of a relationship condition as (table, column) pair sets."""
     pairs: set[frozenset[tuple[str, str]]] = set()
     for equality in _conjuncts(_parse_expression(condition)):
         if not isinstance(equality, exp.EQ):
@@ -915,10 +963,12 @@ def _condition_pairs(condition: str) -> set[frozenset[tuple[str, str]]]:
 
 
 def _model_for_alias(left_models: list[tuple[str, str]], alias: str) -> str:
+    """Model name behind ``alias`` in the left-hand join sources."""
     return next(model for name, model in left_models if name == alias)
 
 
 def _relationship_condition(relationship: Relationship, aliases: dict[str, str]) -> exp.Expr:
+    """Relationship condition with its model names replaced by the query's aliases."""
     condition = _parse_expression(relationship.condition)
     for column in list(condition.find_all(exp.Column)):
         alias = aliases.get(column.table.lower())

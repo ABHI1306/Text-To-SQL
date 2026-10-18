@@ -1,3 +1,5 @@
+"""Ollama adapter for local SQL generation with JSON-constrained output."""
+
 from collections.abc import Mapping
 
 import httpx
@@ -6,6 +8,7 @@ from app.observability.usage import counts_from_ollama, record_call, record_erro
 
 
 class OllamaLLMAdapter:
+    """Calls the local Ollama ``/api/generate`` endpoint and records usage metrics."""
     def __init__(
         self,
         base_url: str,
@@ -13,6 +16,7 @@ class OllamaLLMAdapter:
         *,
         timeout_seconds: float = 120,
     ) -> None:
+        """Validate and store the Ollama URL, model name and timeout."""
         if not base_url:
             raise ValueError("OLLAMA_URL is required")
         if not model:
@@ -28,6 +32,7 @@ class OllamaLLMAdapter:
         temperature: float = 0.0,
         schema: Mapping[str, object] | None = None,
     ) -> str:
+        """Return the model's JSON text for ``prompt``, constrained by ``schema`` if given."""
         try:
             response = httpx.post(
                 f"{self._base_url}/api/generate",

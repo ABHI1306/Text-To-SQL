@@ -24,6 +24,7 @@ def reencrypt(blob: bytes, old: Fernet, new: Fernet) -> bytes:
 
 
 def _fernet(name: str, value: str | None) -> Fernet:
+    """Build a ``Fernet`` from a key value, raising ``ValueError`` naming the setting when bad."""
     if not value:
         raise ValueError(f"{name} is not set")
     try:
@@ -72,6 +73,7 @@ def rotate_connection_key(
 
 
 def _rotate(skip_unreadable: bool) -> int:
+    """Command handler: re-encrypt saved connections from the old key to the configured one."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise ValueError("METADATA_DATABASE_URL is not set")
@@ -89,6 +91,7 @@ def _rotate(skip_unreadable: bool) -> int:
 
 
 def _reindex(project_id: str) -> int:
+    """Command handler: rebuild a project's vector index from its deployed model."""
     from app.adapters.llm.ollama_embedder import OllamaEmbedderAdapter
     from app.adapters.metadata.postgres import PostgresMetadataRepository
     from app.adapters.vector_store.qdrant import QdrantVectorStoreAdapter
@@ -118,6 +121,7 @@ def _reindex(project_id: str) -> int:
 
 
 def main() -> int:
+    """Parse the subcommand and run it; returns 0, or 2 after printing an error."""
     parser = argparse.ArgumentParser(description="Text-to-SQL operator tasks")
     commands = parser.add_subparsers(dest="command", required=True)
     rotate = commands.add_parser("rotate-connection-key", help="re-encrypt saved connections under a new key")

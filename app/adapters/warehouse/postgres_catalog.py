@@ -1,3 +1,5 @@
+"""PostgreSQL catalog adapter: lists tables and profiles them with masked samples."""
+
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,6 +38,7 @@ _SENSITIVE_COLUMN_PARTS = (
 
 
 def mask_sample_value(column_name: str, value: object) -> JsonValue:
+    """Redact values of sensitive-looking columns and make other values JSON-safe."""
     lowered = column_name.lower()
     if any(part in lowered for part in _SENSITIVE_COLUMN_PARTS):
         return "[REDACTED]" if value is not None else None
@@ -49,6 +52,7 @@ def mask_sample_value(column_name: str, value: object) -> JsonValue:
 
 
 class PostgresCatalogAdapter:
+    """Reads schema metadata and sample rows from the warehouse, read-only."""
     def __init__(
         self,
         dsn: str,
@@ -56,6 +60,7 @@ class PostgresCatalogAdapter:
         statement_timeout_ms: int = 10_000,
         ssl_ca_certificate: str | None = None,
     ) -> None:
+        """Validate the DSN and timeout and store the connection settings."""
         if not dsn:
             raise ValueError("A catalog DSN is required")
         if statement_timeout_ms <= 0:
@@ -66,6 +71,7 @@ class PostgresCatalogAdapter:
 
     @contextmanager
     def _connect(self) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
+        """Yield a connection, using a temporary CA file when one is configured."""
         if self._ssl_ca_certificate is None:
             with psycopg.connect(self._dsn) as connection:
                 yield connection
@@ -78,6 +84,7 @@ class PostgresCatalogAdapter:
                 yield connection
 
     def list_tables(self, schemas: tuple[str, ...] = ()) -> tuple[CatalogTable, ...]:
+        """List base tables outside system ``schemas``, optionally limited to ``schemas``."""
         with (
             self._connect() as connection,
             connection.cursor() as cursor,
@@ -125,6 +132,7 @@ class PostgresCatalogAdapter:
         *,
         sample_limit: int = 3,
     ) -> tuple[CatalogTableProfile, ...]:
+        """Profile each table (columns, keys, count, masked samples) in one read-only session."""
         if sample_limit < 0 or sample_limit > 10:
             raise ValueError("sample_limit must be between 0 and 10")
         results: list[CatalogTableProfile] = []
@@ -145,6 +153,7 @@ class PostgresCatalogAdapter:
         return tuple(results)
 
     def _set_read_only(self, cursor: psycopg.Cursor[tuple[object, ...]]) -> None:
+        """Make the transaction read-only and apply the statement timeout."""
         cursor.execute("SET TRANSACTION READ ONLY")
         cursor.execute(
             "SELECT set_config('statement_timeout', %s, true)",
@@ -159,6 +168,7 @@ class PostgresCatalogAdapter:
         *,
         sample_limit: int,
     ) -> CatalogTableProfile:
+        """Profile one table: columns, primary and foreign keys, row count and masked samples."""
         cursor.execute(
             """
             SELECT column_name, data_type, is_nullable

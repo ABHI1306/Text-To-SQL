@@ -21,15 +21,19 @@ _COLUMNS = (
 
 
 class PostgresJobStore:
+    """Scheduled jobs and per-slot leases, so exactly one worker runs each slot."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[Row]:
+        """Open a connection that returns rows as dicts."""
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     def list_due(self, now: datetime, limit: int) -> list[ScheduledJob]:
+        """List active jobs whose next run time has passed, oldest first."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -42,6 +46,7 @@ class PostgresJobStore:
             return [_job(row) for row in cursor.fetchall()]
 
     def list_stale(self, now: datetime, limit: int) -> list[tuple[ScheduledJob, datetime]]:
+        """List active jobs whose running lease expired (dead worker) with their slot."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -64,6 +69,7 @@ class PostgresJobStore:
         lease_seconds: int,
         advance_to: datetime | None,
     ) -> int | None:
+        """Claim a slot lease (advancing ``next_run_at`` first); attempts, or ``None`` if lost."""
         with self._connect() as connection, connection.cursor() as cursor:
             if advance_to is not None:
                 # The row lock serialises racing workers: the loser finds next_run_at already
@@ -109,6 +115,7 @@ class PostgresJobStore:
         result: Mapping[str, object] | None,
         error: str | None,
     ) -> None:
+        """Close the worker's own running lease and record the job's last status."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -129,6 +136,7 @@ class PostgresJobStore:
                 )
 
     def pause(self, job_id: str, reason: str) -> None:
+        """Pause a job and record why."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -140,6 +148,7 @@ class PostgresJobStore:
             )
 
     def get(self, job_id: str) -> ScheduledJob | None:
+        """Return one job, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_COLUMNS} FROM scheduled_jobs WHERE id = %s::uuid", (job_id,)
@@ -148,6 +157,7 @@ class PostgresJobStore:
         return _job(row) if row else None
 
     def get_for_project(self, project_id: str, kind: str) -> ScheduledJob | None:
+        """Return the project's job of a kind, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_COLUMNS} FROM scheduled_jobs WHERE project_id = %s::uuid AND kind = %s",
@@ -165,6 +175,7 @@ class PostgresJobStore:
         timezone: str,
         next_run_at: datetime,
     ) -> ScheduledJob:
+        """Create or reset the project's single drift job, reactivating it."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -193,6 +204,7 @@ class PostgresJobStore:
         next_run_at: datetime,
         saved_question_id: str | None,
     ) -> ScheduledJob:
+        """Create a job, optionally tied to a saved question."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -210,6 +222,7 @@ class PostgresJobStore:
     def list_jobs(
         self, kind: str, *, owner_id: str | None = None, project_id: str | None = None
     ) -> list[ScheduledJob]:
+        """List jobs of a kind, optionally by owner and project."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -225,6 +238,7 @@ class PostgresJobStore:
     def update_job(
         self, job_id: str, schedule: str, timezone: str, next_run_at: datetime
     ) -> ScheduledJob | None:
+        """Change a job's schedule and reactivate it; ``None`` if missing."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -239,6 +253,7 @@ class PostgresJobStore:
         return _job(row) if row else None
 
     def resume(self, job_id: str, next_run_at: datetime) -> ScheduledJob | None:
+        """Reactivate a paused job from the given next run time."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -252,11 +267,13 @@ class PostgresJobStore:
         return _job(row) if row else None
 
     def delete_job(self, job_id: str) -> bool:
+        """Delete a job; true if it existed."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM scheduled_jobs WHERE id = %s::uuid", (job_id,))
             return cursor.rowcount == 1
 
     def delete_for_project(self, project_id: str, kind: str) -> bool:
+        """Delete the project's job of a kind; true if it existed."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM scheduled_jobs WHERE project_id = %s::uuid AND kind = %s",
@@ -265,6 +282,7 @@ class PostgresJobStore:
             return cursor.rowcount == 1
 
     def health(self, now: datetime, *, grace_seconds: int) -> Mapping[str, object]:
+        """Summarise job and lease counts (overdue, stale, recent failures) for monitoring."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -298,6 +316,7 @@ class PostgresJobStore:
 
 
 def _job(row: Row) -> ScheduledJob:
+    """Convert a database row to a ``ScheduledJob``."""
     return ScheduledJob(
         id=str(row["id"]),
         project_id=str(row["project_id"]),

@@ -1,3 +1,5 @@
+"""Semantic model (MDL) documents and their validation rules."""
+
 from __future__ import annotations
 
 import re
@@ -17,6 +19,7 @@ class MdlValidationError(ValueError):
 
 
 class JoinType(StrEnum):
+    """Cardinality of a relationship between two models."""
     ONE_TO_ONE = "ONE_TO_ONE"
     ONE_TO_MANY = "ONE_TO_MANY"
     MANY_TO_ONE = "MANY_TO_ONE"
@@ -24,11 +27,13 @@ class JoinType(StrEnum):
 
 
 class RelationshipSource(StrEnum):
+    """How a relationship was found: a database foreign key or a column-name guess."""
     DATABASE_FOREIGN_KEY = "database_foreign_key"
     INFERRED_COLUMN_NAME = "inferred_column_name"
 
 
 class MdlModel(BaseModel):
+    """A semantic model over one physical table, with its columns."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str
@@ -41,6 +46,7 @@ class MdlModel(BaseModel):
 
     @model_validator(mode="after")
     def mark_for_review(self) -> Self:
+        """Flag the model for review when undescribed, or large with undescribed columns."""
         if not self.description.strip() or (
             self.approx_rows >= LARGE_TABLE_ROWS
             and any(not column.description.strip() for column in self.columns)
@@ -50,6 +56,7 @@ class MdlModel(BaseModel):
 
 
 class Relationship(BaseModel):
+    """A join between two distinct models, as a SQL condition."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str
@@ -61,12 +68,14 @@ class Relationship(BaseModel):
 
     @model_validator(mode="after")
     def require_distinct_models(self) -> Self:
+        """Reject a relationship that joins a model to itself."""
         if self.models[0] == self.models[1]:
             raise ValueError("a relationship must reference two distinct models")
         return self
 
 
 class MetricField(BaseModel):
+    """A named SQL expression used as a metric dimension or measure."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str
@@ -75,6 +84,7 @@ class MetricField(BaseModel):
 
 
 class Metric(BaseModel):
+    """A business metric defined by dimensions and measures over one base model."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str
@@ -85,6 +95,7 @@ class Metric(BaseModel):
 
 
 class Mdl(BaseModel):
+    """A whole semantic-model document; construction validates names and references."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     version: int = Field(default=3, ge=1)
@@ -97,6 +108,7 @@ class Mdl(BaseModel):
 
     @model_validator(mode="after")
     def validate_semantic_references(self) -> Self:
+        """Check unique names, column expressions, relationships and metrics."""
         self._validate_unique_names()
         model_by_name = {model.name: model for model in self.models}
         self._validate_calculated_columns(model_by_name)
@@ -105,6 +117,7 @@ class Mdl(BaseModel):
         return self
 
     def _validate_unique_names(self) -> None:
+        """Require valid, unique names for models, relationships, metrics and their fields."""
         name_groups = {
             "model": [model.name for model in self.models],
             "relationship": [relationship.name for relationship in self.relationships],
@@ -124,6 +137,7 @@ class Mdl(BaseModel):
             )
 
     def _validate_calculated_columns(self, models: dict[str, MdlModel]) -> None:
+        """Check primary keys name real columns and calculated expressions use only own columns."""
         for model in self.models:
             columns = {column.name for column in model.columns}
             if model.primary_key and model.primary_key not in columns:
@@ -141,6 +155,7 @@ class Mdl(BaseModel):
                     )
 
     def _validate_relationships(self, models: dict[str, MdlModel]) -> None:
+        """Check each relationship uses known models and qualified, known columns."""
         for relationship in self.relationships:
             missing = set(relationship.models) - models.keys()
             if missing:
@@ -158,6 +173,7 @@ class Mdl(BaseModel):
             )
 
     def _validate_metrics(self, models: dict[str, MdlModel]) -> None:
+        """Check each metric's base model exists and its expressions use only its columns."""
         for metric in self.metrics:
             model = models.get(metric.base_object)
             if model is None:
@@ -172,6 +188,7 @@ class Mdl(BaseModel):
 
 
 class MdlColumn(BaseModel):
+    """A column of a model: physical, or calculated from an expression over other columns."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str
@@ -185,6 +202,7 @@ class MdlColumn(BaseModel):
 
     @model_validator(mode="after")
     def validate_calculation_and_review(self) -> Self:
+        """Require an expression exactly for calculated columns; flag undescribed columns."""
         if self.is_calculated != (self.expression is not None):
             raise ValueError(
                 "calculated columns require an expression and physical columns forbid one"
@@ -195,6 +213,7 @@ class MdlColumn(BaseModel):
 
 
 def _require_unique_valid_names(names: list[str], kind: str) -> None:
+    """Raise ``ValueError`` for a name outside ``NAME_PATTERN`` or repeated in ``names``."""
     seen: set[str] = set()
     for name in names:
         if not NAME_PATTERN.fullmatch(name):
@@ -205,6 +224,7 @@ def _require_unique_valid_names(names: list[str], kind: str) -> None:
 
 
 def _parse_expression(expression: str, field_path: str) -> exp.Expr:
+    """Parse a PostgreSQL expression, rejecting syntax errors and whole queries."""
     try:
         parsed = parse_one(expression, read="postgres")
     except ParseError as error:
@@ -220,6 +240,7 @@ def _validate_expression(
     allowed_columns: set[str],
     field_path: str,
 ) -> None:
+    """Require ``expression`` to parse and reference only ``allowed_columns``."""
     parsed = _parse_expression(expression, field_path)
     referenced = {column.name.lower() for column in parsed.find_all(exp.Column)}
     unknown = referenced - allowed_columns
@@ -233,6 +254,7 @@ def _validate_relationship_condition(
     allowed_models: dict[str, set[str]],
     field_path: str,
 ) -> None:
+    """Require a boolean condition whose columns are qualified by an allowed model and exist."""
     parsed = _parse_expression(condition, field_path)
     if not any(isinstance(node, exp.Predicate) for node in parsed.walk()):
         raise ValueError(f"{field_path}: expected a boolean join condition")
@@ -274,6 +296,7 @@ def validate_mdl_against_catalog(
 
 
 def _compatible_type(model_type: str, database_type: str) -> bool:
+    """Whether a declared type and a database type are equal or aliases of one another."""
     groups = (
         {"int2", "smallint", "smallserial"},
         {"int4", "integer", "serial"},

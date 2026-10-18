@@ -56,6 +56,7 @@ MAX_ROWS_CEILING = 10_000
 
 @contextmanager
 def _mapped() -> Iterator[None]:
+    """Translate collaboration-service errors into 404, 422 and 503 HTTP errors."""
     try:
         yield
     except NotFound as error:
@@ -75,6 +76,7 @@ def _mapped() -> Iterator[None]:
 
 
 class SavedQuestionRequest(BaseModel):
+    """Body for saving a question: text, logical SQL and optional chart spec."""
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
@@ -86,6 +88,7 @@ class SavedQuestionRequest(BaseModel):
 def list_saved_questions(
     project_id: UUID, context: BuildContext, service: CollabDependency
 ) -> list[dict[str, Any]]:
+    """List the caller's saved questions in a project (``create_dashboard``)."""
     with _mapped():
         return service.list_saved_questions(context, str(project_id))
 
@@ -94,6 +97,7 @@ def list_saved_questions(
 def create_saved_question(
     project_id: UUID, body: SavedQuestionRequest, context: BuildContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Save a question and its logical SQL for dashboards (``create_dashboard``)."""
     with _mapped():
         return service.save_question(
             context, str(project_id), body.question, body.logical_sql, body.chart_spec
@@ -105,6 +109,7 @@ def create_saved_question(
 def delete_saved_question(
     project_id: UUID, question_id: UUID, context: BuildContext, service: CollabDependency
 ) -> Response:
+    """Delete a saved question belonging to this project (``create_dashboard``)."""
     with _mapped():
         record = service.get_saved_question(context, str(question_id))
         if record["project_id"] != str(project_id):
@@ -129,6 +134,7 @@ def saved_question_result(
 
 
 class DashboardCreate(BaseModel):
+    """Body for a new dashboard: project, title and layout."""
     model_config = ConfigDict(extra="forbid")
 
     project_id: UUID
@@ -137,6 +143,7 @@ class DashboardCreate(BaseModel):
 
 
 class DashboardPatch(BaseModel):
+    """Partial update of a dashboard's title or layout."""
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -144,6 +151,7 @@ class DashboardPatch(BaseModel):
 
 
 class TileIn(BaseModel):
+    """One dashboard tile: a saved question, chart spec, position and refresh schedule."""
     model_config = ConfigDict(extra="forbid")
 
     saved_question_id: UUID
@@ -153,6 +161,7 @@ class TileIn(BaseModel):
 
 
 class TilesRequest(BaseModel):
+    """Body replacing a dashboard's tiles (at most 24)."""
     model_config = ConfigDict(extra="forbid")
 
     tiles: list[TileIn] = Field(max_length=24)
@@ -162,6 +171,7 @@ class TilesRequest(BaseModel):
 def list_dashboards(
     project_id: Annotated[UUID, Query()], context: BuildContext, service: CollabDependency
 ) -> list[dict[str, Any]]:
+    """List the caller's dashboards in a project (requires ``create_dashboard``)."""
     with _mapped():
         return service.list_dashboards(context, str(project_id))
 
@@ -170,6 +180,7 @@ def list_dashboards(
 def create_dashboard(
     body: DashboardCreate, context: BuildContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Create a dashboard in a project (requires ``create_dashboard``)."""
     with _mapped():
         return service.create_dashboard(context, str(body.project_id), body.title, body.layout)
 
@@ -178,6 +189,7 @@ def create_dashboard(
 def get_dashboard(
     dashboard_id: UUID, context: ViewContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Read a dashboard the caller owns or that was shared with them."""
     with _mapped():
         return service.get_dashboard(context, str(dashboard_id))
 
@@ -186,6 +198,7 @@ def get_dashboard(
 def patch_dashboard(
     dashboard_id: UUID, body: DashboardPatch, context: BuildContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Rename a dashboard or change its layout (requires ``create_dashboard``)."""
     with _mapped():
         return service.update_dashboard(context, str(dashboard_id), body.title, body.layout)
 
@@ -194,6 +207,7 @@ def patch_dashboard(
 def delete_dashboard(
     dashboard_id: UUID, context: BuildContext, service: CollabDependency
 ) -> Response:
+    """Delete a dashboard (requires ``create_dashboard``)."""
     with _mapped():
         service.delete_dashboard(context, str(dashboard_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -203,6 +217,7 @@ def delete_dashboard(
 def put_tiles(
     dashboard_id: UUID, body: TilesRequest, context: BuildContext, service: CollabDependency
 ) -> list[dict[str, Any]]:
+    """Replace all tiles of a dashboard (requires ``create_dashboard``)."""
     tiles = [
         {"saved_question_id": str(t.saved_question_id), "chart_spec": t.chart_spec,
          "position": t.position, "refresh_schedule": t.refresh_schedule}
@@ -216,6 +231,7 @@ def put_tiles(
 def refresh_dashboard(
     dashboard_id: UUID, context: BuildContext, service: CollabDependency
 ) -> dict[str, int]:
+    """Refresh the dashboard's tiles and return how many were refreshed."""
     with _mapped():
         return {"refreshed_tiles": service.refresh_dashboard(context, str(dashboard_id))}
 
@@ -237,6 +253,7 @@ def tile_result(
 
 
 class ScheduleCreate(BaseModel):
+    """Body for scheduling a saved question: cron expression and timezone."""
     model_config = ConfigDict(extra="forbid")
 
     saved_question_id: UUID
@@ -245,6 +262,7 @@ class ScheduleCreate(BaseModel):
 
 
 class SchedulePatch(BaseModel):
+    """Partial update of a schedule's cron expression or timezone."""
     model_config = ConfigDict(extra="forbid")
 
     schedule: str | None = Field(default=None, min_length=1, max_length=100)
@@ -252,6 +270,7 @@ class SchedulePatch(BaseModel):
 
 
 def _job_json(job: ScheduledJob) -> dict[str, Any]:
+    """Serialise a scheduled job into its API shape, flagging a failed last run."""
     return {
         "id": job.id, "project_id": job.project_id, "saved_question_id": job.saved_question_id,
         "schedule": job.schedule, "timezone": job.timezone, "status": job.status,
@@ -263,6 +282,7 @@ def _job_json(job: ScheduledJob) -> dict[str, Any]:
 
 @router.get("/scheduled-questions", tags=["Scheduled questions"])
 def list_scheduled(context: ScheduleContext, service: CollabDependency) -> list[dict[str, Any]]:
+    """List the caller's scheduled questions (requires ``schedule_question``)."""
     return [_job_json(job) for job in service.list_scheduled(context)]
 
 
@@ -270,6 +290,7 @@ def list_scheduled(context: ScheduleContext, service: CollabDependency) -> list[
 def create_scheduled(
     body: ScheduleCreate, context: ScheduleContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Schedule a saved question to run on a cron (``schedule_question``)."""
     with _mapped():
         return _job_json(
             service.schedule_question(
@@ -280,6 +301,7 @@ def create_scheduled(
 
 @router.get("/scheduled-questions/{job_id}", tags=["Scheduled questions"])
 def get_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDependency) -> dict[str, Any]:
+    """Read one scheduled question (requires ``schedule_question``)."""
     with _mapped():
         return _job_json(service.get_scheduled(context, str(job_id)))
 
@@ -288,12 +310,14 @@ def get_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDepende
 def patch_scheduled(
     job_id: UUID, body: SchedulePatch, context: ScheduleContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Change a schedule's cron expression or timezone (``schedule_question``)."""
     with _mapped():
         return _job_json(service.update_schedule(context, str(job_id), body.schedule, body.timezone))
 
 
 @router.delete("/scheduled-questions/{job_id}", tags=["Scheduled questions"], status_code=204)
 def delete_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDependency) -> Response:
+    """Delete a scheduled question (requires ``schedule_question``)."""
     with _mapped():
         service.delete_scheduled(context, str(job_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -306,12 +330,14 @@ def run_now(
     service: CollabDependency,
     idempotency_key: Annotated[str | None, Header(max_length=200)] = None,
 ) -> dict[str, Any]:
+    """Run a scheduled question immediately; a repeated Idempotency-Key reuses the run."""
     with _mapped():
         return service.run_now(context, str(job_id), idempotency_key)
 
 
 @router.post("/scheduled-questions/{job_id}/pause", tags=["Scheduled questions"], status_code=204)
 def pause_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDependency) -> Response:
+    """Pause a scheduled question (requires ``schedule_question``)."""
     with _mapped():
         service.pause(context, str(job_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -321,6 +347,7 @@ def pause_scheduled(job_id: UUID, context: ScheduleContext, service: CollabDepen
 def resume_scheduled(
     job_id: UUID, context: ScheduleContext, service: CollabDependency
 ) -> dict[str, Any]:
+    """Resume a paused scheduled question (requires ``schedule_question``)."""
     with _mapped():
         return _job_json(service.resume(context, str(job_id)))
 
@@ -329,6 +356,7 @@ def resume_scheduled(
 def scheduled_runs(
     job_id: UUID, context: ScheduleContext, service: CollabDependency
 ) -> list[dict[str, Any]]:
+    """List past runs of a scheduled question (requires ``schedule_question``)."""
     with _mapped():
         return service.list_runs(context, str(job_id))
 
@@ -337,6 +365,7 @@ def scheduled_runs(
 
 
 class ShareRequest(BaseModel):
+    """Body for sharing a dashboard, saved question or thread with a user or role."""
     model_config = ConfigDict(extra="forbid")
 
     resource_type: Literal["dashboard", "saved_question", "thread"]
@@ -346,7 +375,9 @@ class ShareRequest(BaseModel):
 
 
 def _thread_owner(threads: PostgresThreadStore) -> Any:
+    """Build a lookup from thread id to its (owner, project), or None if missing."""
     def lookup(thread_id: str) -> tuple[str, str] | None:
+        """Return the thread's owner and project ids, or None when it does not exist."""
         record = threads.get(thread_id)
         return (record.user_id, record.project_id) if record else None
 
@@ -380,6 +411,7 @@ def list_shares(
     service: CollabDependency,
     threads: ThreadsDependency,
 ) -> list[dict[str, Any]]:
+    """List who a resource is shared with (requires ``share``)."""
     with _mapped():
         return service.list_shares(
             context, resource_type, str(resource_id), thread_owner=_thread_owner(threads)
@@ -390,6 +422,7 @@ def list_shares(
 def create_share(
     body: ShareRequest, context: ShareContext, service: CollabDependency, threads: ThreadsDependency
 ) -> dict[str, Any]:
+    """Share a resource with a user or role (requires ``share``)."""
     with _mapped():
         return service.create_share(
             context, body.resource_type, str(body.resource_id), body.grantee_type,
@@ -401,6 +434,7 @@ def create_share(
 def delete_share(
     share_id: UUID, context: ShareContext, service: CollabDependency, threads: ThreadsDependency
 ) -> Response:
+    """Revoke a share (requires ``share``)."""
     with _mapped():
         service.revoke_share(context, str(share_id), thread_owner=_thread_owner(threads))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -408,6 +442,7 @@ def delete_share(
 
 @router.get("/shared-with-me", tags=["Sharing"])
 def shared_with_me(context: ViewContext, service: CollabDependency) -> list[dict[str, Any]]:
+    """List items shared with the caller or their role."""
     return service.shared_with_me(context)
 
 
@@ -419,6 +454,7 @@ def list_notifications(
     context: SignedIn, store: StoreDependency,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> list[dict[str, Any]]:
+    """List the caller's notifications, newest first."""
     return store.list_notifications(context.user_id, limit)
 
 
@@ -426,6 +462,7 @@ def list_notifications(
 def mark_notification_read(
     notification_id: UUID, context: SignedIn, store: StoreDependency
 ) -> Response:
+    """Mark one of the caller's notifications as read."""
     if not store.mark_notification_read(context.user_id, str(notification_id)):
         raise HTTPException(status_code=404, detail="Notification not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -435,6 +472,7 @@ def mark_notification_read(
 
 
 class AllowedHostsRequest(BaseModel):
+    """Body replacing the allowlist of warehouse hosts."""
     model_config = ConfigDict(extra="forbid")
 
     hosts: list[str] = Field(max_length=100)
@@ -442,6 +480,7 @@ class AllowedHostsRequest(BaseModel):
 
 @router.get("/settings/allowed-hosts", tags=["Admin"])
 def get_allowed_hosts(context: ConnectionContext, store: StoreDependency) -> dict[str, Any]:
+    """Show the warehouse host allowlist and whether it comes from the database or env."""
     stored = store.get_setting(ALLOWED_HOSTS_SETTING)
     seeded = isinstance(stored, list)
     return {
@@ -455,6 +494,7 @@ def put_allowed_hosts(
     body: AllowedHostsRequest, context: ConnectionContext, store: StoreDependency,
     audit: AuditDependency,
 ) -> dict[str, Any]:
+    """Replace the host allowlist; link-local and metadata hosts are refused."""
     try:
         hosts = validate_allowed_hosts(body.hosts)
     except ValueError as error:

@@ -1,3 +1,5 @@
+"""Command-line management of local accounts: bootstrap the first DBA, create, reset."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +15,7 @@ from app.config import get_settings
 
 
 def _repository() -> PostgresMetadataRepository:
+    """Open the metadata repository from settings, or raise if the database is not set."""
     settings = get_settings()
     if not settings.metadata_database_url:
         raise RuntimeError("Set METADATA_DATABASE_URL before managing users")
@@ -20,6 +23,7 @@ def _repository() -> PostgresMetadataRepository:
 
 
 def _confirmed_password(password: str | None = None) -> str:
+    """Prompt twice for a temporary password (unless given) and require a match."""
     first = password if password is not None else getpass.getpass("Temporary password: ")
     second = (
         password
@@ -32,6 +36,7 @@ def _confirmed_password(password: str | None = None) -> str:
 
 
 def _add_user(args: argparse.Namespace) -> int:
+    """Run the bootstrap, create or reset command and print the resulting user id."""
     repo = _repository()
     if args.command == "bootstrap-dba":
         username = os.getenv("BOOTSTRAP_DBA_USERNAME", "").strip()
@@ -54,6 +59,7 @@ def _add_user(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """Parse the subcommand and run it; returns 0, or 2 after printing an error."""
     parser = argparse.ArgumentParser(description="Manage local Text-to-SQL accounts")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("bootstrap-dba", help="Create the first DBA from environment")

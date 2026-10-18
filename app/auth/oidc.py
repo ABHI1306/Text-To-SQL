@@ -28,6 +28,7 @@ MAX_PENDING_LOGINS = 10_000
 
 
 class OidcStateStore(Protocol):
+    """Short-lived storage for pending OIDC logins, keyed by the hash of ``state``."""
     def put(
         self, state_hash: str, nonce: str, code_verifier: str, expires_at: datetime
     ) -> bool:
@@ -43,6 +44,7 @@ class InMemoryOidcStateStore:
     """Single-process store; use the Postgres store when more than one API replica runs."""
 
     def __init__(self, capacity: int = MAX_PENDING_LOGINS) -> None:
+        """Create an empty store that refuses new logins past ``capacity``."""
         self._capacity = capacity
         self._rows: dict[str, tuple[str, str, datetime]] = {}
         self._lock = Lock()
@@ -50,6 +52,7 @@ class InMemoryOidcStateStore:
     def put(
         self, state_hash: str, nonce: str, code_verifier: str, expires_at: datetime
     ) -> bool:
+        """Store a pending login after purging expired rows; False when full."""
         now = datetime.now(UTC)
         with self._lock:
             for key in [k for k, row in self._rows.items() if row[2] <= now]:
@@ -60,6 +63,7 @@ class InMemoryOidcStateStore:
             return True
 
     def consume(self, state_hash: str, now: datetime) -> tuple[str, str] | None:
+        """Remove and return (nonce, code_verifier) if unexpired, so a state works once."""
         with self._lock:
             row = self._rows.pop(state_hash, None)
         if row is None or row[2] <= now:
@@ -68,10 +72,12 @@ class InMemoryOidcStateStore:
 
 
 def state_hash(state: str) -> str:
+    """SHA-256 hex of the raw ``state``; only this hash is ever stored."""
     return hashlib.sha256(state.encode("utf-8")).hexdigest()
 
 
 class OidcLoginService:
+    """Runs the two OIDC steps (begin and complete) with rate limits and one-time state."""
     def __init__(
         self,
         provider: FederatedIdentityPort,
@@ -81,6 +87,7 @@ class OidcLoginService:
         ttl_seconds: int = STATE_TTL_SECONDS,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        """Wire the provider, state store and auth service; ``clock`` is injectable for tests."""
         self._provider = provider
         self._store = store
         self._auth = auth
@@ -89,9 +96,14 @@ class OidcLoginService:
 
     @property
     def ttl_seconds(self) -> int:
+        """How long a pending login stays valid, in seconds."""
         return self._ttl
 
     def begin(self, client_key: str) -> AuthorizationRequest:
+        """Start a login: rate-limit by address, ask the provider for a request and store its state.
+
+        Raises ``AuthenticationError`` when throttled, the provider is down or the store is full.
+        """
         if not self._auth.external_login_allowed(client_key):
             raise AuthenticationError("Too many sign-in attempts")
         if not self._auth.external_begin_allowed(client_key):
@@ -119,7 +131,13 @@ class OidcLoginService:
         browser_state: str | None,
         client_key: str,
     ) -> LoginResult:
+        """Finish a login from the provider callback and open a local session.
+
+        The state must match the browser cookie (login CSRF) and exist unexpired in the store;
+        every refusal is audited and surfaces as one generic ``AuthenticationError``.
+        """
         def refuse(reason: str, error: Exception | None = None) -> AuthenticationError:
+            """Audit the failure and return the generic error to raise."""
             self._auth.record_external_failure("oidc", reason, client_key)
             failure = AuthenticationError("Single sign-on failed")
             failure.__cause__ = error

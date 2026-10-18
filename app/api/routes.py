@@ -1,3 +1,5 @@
+"""Core API routes: auth, projects and setup, MDL save and deploy, users, roles, samples."""
+
 from __future__ import annotations
 
 from typing import Annotated, cast
@@ -89,6 +91,7 @@ SAMPLE_PROJECT_TEMPLATES: dict[str, dict[str, object]] = {
 
 
 class LoginRequest(BaseModel):
+    """Credentials for a local or directory login."""
     model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=1, max_length=128)
@@ -96,6 +99,7 @@ class LoginRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
+    """Current and new password (new one at least 12 characters)."""
     model_config = ConfigDict(extra="forbid")
 
     current_password: SecretStr = Field(min_length=1, max_length=1024, alias="currentPassword")
@@ -103,6 +107,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 class TableSelection(BaseModel):
+    """One warehouse table, by schema and table name."""
     model_config = ConfigDict(extra="forbid")
 
     schema_name: str = Field(min_length=1, alias="schema")
@@ -110,10 +115,12 @@ class TableSelection(BaseModel):
 
 
 class SelectedTablesRequest(BaseModel):
+    """Body listing the tables a project's model is built from."""
     tables: list[TableSelection] = Field(min_length=1, max_length=500)
 
 
 class AskQuestionRequest(BaseModel):
+    """Body carrying a single natural-language question."""
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
@@ -145,6 +152,7 @@ _CAPABILITIES = frozenset(
 
 
 class RoleRequest(BaseModel):
+    """Body for creating or replacing a role; capabilities must be known and unique."""
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9 _-]*$")
@@ -154,6 +162,7 @@ class RoleRequest(BaseModel):
     @field_validator("capabilities")
     @classmethod
     def unique_capabilities(cls, values: list[str]) -> list[str]:
+        """Reject duplicate or unsupported capability names."""
         if len(set(values)) != len(values):
             raise ValueError("Capabilities must be unique")
         if not set(values) <= _CAPABILITIES:
@@ -162,6 +171,7 @@ class RoleRequest(BaseModel):
 
 
 class UserRequest(BaseModel):
+    """Body for a new local user: username, initial password and role."""
     model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=3, max_length=128, pattern=r"^[A-Za-z0-9_.@-]+$")
@@ -170,18 +180,21 @@ class UserRequest(BaseModel):
 
 
 class UserRoleRequest(BaseModel):
+    """Body naming the role to assign to a user."""
     model_config = ConfigDict(extra="forbid")
 
     role: str = Field(min_length=1, max_length=64)
 
 
 class ProjectAccessRequest(BaseModel):
+    """Body listing the projects a user or role may access."""
     model_config = ConfigDict(extra="forbid")
 
     project_ids: list[UUID] = Field(max_length=500)
 
 
 class UserAttributesRequest(BaseModel):
+    """Body with a user's attributes, which row policies may reference."""
     model_config = ConfigDict(extra="forbid")
 
     attributes: dict[str, object] = Field(max_length=100)
@@ -189,12 +202,14 @@ class UserAttributesRequest(BaseModel):
     @field_validator("attributes")
     @classmethod
     def validate_attribute_keys(cls, values: dict[str, object]) -> dict[str, object]:
+        """Require every attribute key to be 1 to 128 characters."""
         if any(not key or len(key) > 128 for key in values):
             raise ValueError("Attribute keys must contain 1 to 128 characters")
         return values
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    """Set the HttpOnly, SameSite=Strict refresh cookie (``Secure`` outside dev)."""
     settings = get_settings()
     response.set_cookie(
         key="refresh_token",
@@ -208,6 +223,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
 
 
 def _clear_refresh_cookie(response: Response) -> None:
+    """Delete the refresh-token cookie."""
     response.delete_cookie(
         key="refresh_token",
         httponly=True,
@@ -218,6 +234,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 
 def _auth_response(result: LoginResult) -> dict[str, object]:
+    """Build the token response body; the refresh token travels only as a cookie."""
     return {
         "access_token": result.access_token,
         "token_type": "bearer",
@@ -230,6 +247,7 @@ def _project_connection(
     repository: PostgresMetadataRepository,
     project_id: UUID,
 ) -> tuple[dict[str, object], PostgresCatalogAdapter]:
+    """Return the project row and a catalog adapter on its warehouse."""
     project, dsn, ca_certificate = _project_connection_details(repository, project_id)
     settings = get_settings()
     return project, PostgresCatalogAdapter(
@@ -243,6 +261,10 @@ def _project_connection_details(
     repository: PostgresMetadataRepository,
     project_id: UUID,
 ) -> tuple[dict[str, object], str, str | None]:
+    """Decrypt a project's stored credentials into a DSN.
+
+    Returns the project row, the DSN (``verify-full`` TLS when a CA is stored) and the CA text.
+    """
     project = repository.get_project_connection(str(project_id))
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -275,11 +297,13 @@ def _project_connection_details(
 
 
 def _require_project_access(context: AuthContext, project_id: UUID) -> None:
+    """Raise 404 unless the project is in the caller's allowed projects."""
     if str(project_id) not in context.project_ids:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
 def _require_delegable_capabilities(context: AuthContext, capabilities: list[str]) -> None:
+    """Refuse granting capabilities the caller does not hold."""
     if not set(capabilities) <= context.capabilities:
         raise HTTPException(
             status_code=403,
@@ -310,6 +334,7 @@ def _require_manageable_user(
 
 
 def _require_delegable_projects(context: AuthContext, project_ids: list[UUID]) -> None:
+    """Refuse granting projects the caller cannot access (DBA excepted)."""
     if (
         context.role_name != "DBA"
         and not {str(project_id) for project_id in project_ids} <= context.project_ids
@@ -321,6 +346,7 @@ def _require_delegable_projects(context: AuthContext, project_ids: list[UUID]) -
 
 
 def _profile_service(catalog: PostgresCatalogAdapter) -> ProfilingService:
+    """Build a profiling service over the catalog and the local SQL model."""
     settings = get_settings()
     return ProfilingService(
         catalog,
@@ -329,6 +355,7 @@ def _profile_service(catalog: PostgresCatalogAdapter) -> ProfilingService:
 
 
 def _serialize_draft(draft: ProfiledDraft) -> dict[str, object]:
+    """Serialise a profiled draft (MDL, tables, summary) with API aliases."""
     return {
         "mdl": draft.mdl.model_dump(by_alias=True),
         "tables": [table.model_dump(by_alias=True) for table in draft.tables],
@@ -343,6 +370,7 @@ def login(
     response: Response,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Sign in with username and password; sets the refresh cookie and returns an access token."""
     client_key = request.client.host if request.client else "unknown"
     try:
         result = auth_service.login(
@@ -362,6 +390,7 @@ def refresh(
     response: Response,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Exchange the refresh cookie for a new access token; clears the cookie if invalid."""
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token is invalid; sign in again")
@@ -380,6 +409,7 @@ def logout(
     response: Response,
     auth_service: AuthServiceDependency,
 ) -> Response:
+    """End the session behind the refresh cookie and clear the cookie."""
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
         auth_service.logout(refresh_token)
@@ -394,6 +424,7 @@ def change_password(
     context: PasswordChangeContext,
     auth_service: AuthServiceDependency,
 ) -> Response:
+    """Change the caller's password; also usable when a change is forced."""
     if context.session_id is None:
         raise HTTPException(status_code=401, detail="Session is not valid")
     try:
@@ -415,6 +446,7 @@ def get_me(
     context: CurrentContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Return the signed-in user's role, capabilities and accessible projects."""
     projects = repository.list_projects(context.user_id)
     return {
         "user_id": context.user_id,
@@ -433,6 +465,7 @@ def post_connection_test(
     body: ConnectionRequest,
     _context: ManageConnectionContext,
 ) -> dict[str, object]:
+    """Test a warehouse connection read-only without saving it (``manage_connection``)."""
     try:
         result = test_connection(body, effective_settings())
     except ConnectionTestError as error:
@@ -445,6 +478,7 @@ def list_projects(
     context: CurrentContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List the projects the caller can access."""
     projects = repository.list_projects(context.user_id)
     return {
         "items": [
@@ -466,6 +500,7 @@ def create_project(
     auth_service: AuthServiceDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Test, encrypt and save a warehouse connection as a new project (``manage_connection``)."""
     try:
         test_connection(body, effective_settings())
         encrypted = encrypt_connection(body, get_settings())
@@ -503,6 +538,7 @@ def delete_project(
     auth_service: AuthServiceDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Delete a project and clean up its search vectors (``manage_connection``)."""
     _require_project_access(context, project_id)
     project = repository.get_project_connection(str(project_id))
     if project is None:
@@ -540,6 +576,7 @@ def get_setup_state(
     context: ManageConnectionContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Return the project's setup step and selected tables (``manage_connection``)."""
     _require_project_access(context, project_id)
     project = repository.get_project_connection(str(project_id))
     if project is None:
@@ -561,6 +598,7 @@ def list_catalog_tables(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> dict[str, object]:
+    """List and search warehouse tables, paged (requires ``manage_connection``)."""
     _require_project_access(context, project_id)
     _, catalog = _project_connection(repository, project_id)
     try:
@@ -596,6 +634,7 @@ def save_selected_tables(
     context: ManageConnectionContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Save the chosen tables after checking they exist (``manage_connection``)."""
     _require_project_access(context, project_id)
     _, catalog = _project_connection(repository, project_id)
     available = {(table.schema_name, table.table_name) for table in catalog.list_tables()}
@@ -618,6 +657,7 @@ def introspect_project(
     context: ManageConnectionContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Profile the selected tables and draft an MDL with descriptions (``manage_connection``)."""
     _require_project_access(context, project_id)
     selected = repository.parse_project_table_selection(str(project_id))
     tables = tuple((table["schema"], table["table"]) for table in selected)
@@ -643,6 +683,7 @@ def get_mdl(
     repository: RepositoryDependency,
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> dict[str, object]:
+    """Read a saved MDL revision, latest by default (requires ``edit_mdl``)."""
     _require_project_access(context, project_id)
     document = repository.get_mdl(str(project_id), version)
     if document is None:
@@ -658,6 +699,7 @@ def save_mdl(
     repository: RepositoryDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Validate an MDL against the live catalog and save it as a new revision (``edit_mdl``)."""
     _require_project_access(context, project_id)
     project = repository.get_project_connection(str(project_id))
     if project is None:
@@ -705,6 +747,7 @@ def deploy_project_mdl(
     repository: RepositoryDependency,
     revision: Annotated[int | None, Query(ge=1)] = None,
 ) -> dict[str, object]:
+    """Index and activate an MDL revision for questions (requires ``deploy_mdl``)."""
     _require_project_access(context, project_id)
     document = repository.get_mdl(str(project_id), revision)
     if document is None:
@@ -749,6 +792,7 @@ def list_roles(
     _context: ManageRolesContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List roles and their capabilities (requires ``manage_roles``)."""
     return {"items": repository.list_roles()}
 
 
@@ -759,6 +803,7 @@ def create_role(
     repository: RepositoryDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Create a role; the caller can only grant capabilities they hold (``manage_roles``)."""
     _require_delegable_capabilities(context, body.capabilities)
     try:
         role_id = repository.create_role(body.name, body.description, body.capabilities)
@@ -783,6 +828,7 @@ def update_role(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Replace a role's name, description and capabilities (``manage_roles``)."""
     _require_delegable_capabilities(context, body.capabilities)
     try:
         repository.update_role(
@@ -814,6 +860,7 @@ def delete_role(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> Response:
+    """Delete a role that is not in use (requires ``manage_roles``)."""
     try:
         repository.delete_role(str(role_id))
     except KeyError as error:
@@ -830,6 +877,7 @@ def list_users(
     _context: ManageUsersContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List users (requires ``manage_users``)."""
     return {"items": repository.list_users()}
 
 
@@ -839,6 +887,7 @@ def create_user(
     context: ManageUsersContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Create a local user with a role the caller may delegate (``manage_users``)."""
     role_capabilities = repository.get_role_capabilities(body.role)
     if role_capabilities is None:
         raise HTTPException(status_code=404, detail="Role does not exist")
@@ -866,6 +915,7 @@ def assign_user_role(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Change a user's role, within the caller's own authority (``manage_users``)."""
     _require_manageable_user(context, repository, user_id)
     capabilities = repository.get_role_capabilities(body.role)
     if capabilities is None:
@@ -886,6 +936,7 @@ def get_user_project_access(
     _context: ManageUsersContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List the projects granted directly to a user (``manage_users``)."""
     if not any(user["id"] == user_id for user in repository.list_users()):
         raise HTTPException(status_code=404, detail="User not found")
     return {"project_ids": repository.get_user_project_access(str(user_id))}
@@ -900,6 +951,7 @@ def set_user_project_access(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Replace a user's project access, within the caller's own (``manage_users``)."""
     _require_manageable_user(context, repository, user_id)
     _require_delegable_projects(context, body.project_ids)
     try:
@@ -927,6 +979,7 @@ def get_role_project_access(
     _context: ManageRolesContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """List the projects granted to a role (requires ``manage_roles``)."""
     if not any(role["id"] == role_id for role in repository.list_roles()):
         raise HTTPException(status_code=404, detail="Role not found")
     return {"project_ids": repository.get_role_project_access(str(role_id))}
@@ -941,6 +994,7 @@ def set_role_project_access(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Replace a role's project access, within the caller's own (``manage_roles``)."""
     _require_delegable_projects(context, body.project_ids)
     try:
         repository.replace_role_project_access(
@@ -967,6 +1021,7 @@ def get_user_attributes(
     _context: ManageUsersContext,
     repository: RepositoryDependency,
 ) -> dict[str, object]:
+    """Read a user's attributes used by row policies (requires ``manage_users``)."""
     if not any(user["id"] == user_id for user in repository.list_users()):
         raise HTTPException(status_code=404, detail="User not found")
     return {"attributes": repository.get_user_attributes(str(user_id))}
@@ -981,6 +1036,7 @@ def set_user_attributes(
     audit: AuditDependency,
     auth_service: AuthServiceDependency,
 ) -> dict[str, object]:
+    """Replace a user's attributes, which change their row policies (``manage_users``)."""
     _require_manageable_user(context, repository, user_id)
     try:
         repository.replace_user_attributes(str(user_id), body.attributes)
@@ -1001,6 +1057,7 @@ def set_user_attributes(
 def list_sample_project_templates(
     _context: ManageConnectionContext,
 ) -> dict[str, object]:
+    """List the built-in sample projects (requires ``manage_connection``)."""
     return {
         "items": [
             {"id": "ecommerce", "name": "E-commerce", "schemas": ["ecommerce"]},
@@ -1023,6 +1080,7 @@ def create_sample_project(
     auth_service: AuthServiceDependency,
     audit: AuditDependency,
 ) -> dict[str, object]:
+    """Create a sample project from the bundled warehouse with a drafted MDL."""
     template = SAMPLE_PROJECT_TEMPLATES.get(template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="Unknown sample project")
@@ -1034,12 +1092,14 @@ def create_sample_project(
     dsn = conninfo_to_dict(settings.warehouse_dsn)
 
     def required_value(key: str) -> str:
+        """Return a non-empty DSN setting or raise ``ValueError``."""
         value = dsn.get(key)
         if not isinstance(value, str) or not value:
             raise ValueError(f"Sample PostgreSQL connection is missing {key}")
         return value
 
     def optional_value(key: str, default: str) -> str:
+        """Return a DSN setting, or ``default`` when it is missing or empty."""
         value = dsn.get(key)
         return value if isinstance(value, str) and value else default
 

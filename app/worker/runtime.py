@@ -28,6 +28,7 @@ from app.semantic.drift_job import DriftJobHandler
 
 
 def worker_id(settings: Settings) -> str:
+    """The configured worker id, or ``hostname-pid`` when none is set."""
     return settings.scheduler_worker_id or f"{socket.gethostname()}-{os.getpid()}"
 
 
@@ -60,6 +61,7 @@ def project_catalog(
 
 
 def build_scheduler(settings: Settings) -> SchedulerService:
+    """Wire repositories, job handlers and the slot runner into a ``SchedulerService``."""
     if not settings.metadata_database_url:
         raise ValueError("METADATA_DATABASE_URL is required for the worker")
     repository = PostgresMetadataRepository(settings.metadata_database_url)

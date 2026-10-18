@@ -22,20 +22,24 @@ OidcDependency = Annotated[OidcLoginService | None, Depends(get_oidc_service)]
 
 
 def _require_oidc(service: OidcLoginService | None) -> OidcLoginService:
+    """Return the OIDC service or raise 404 when single sign-on is not configured."""
     if service is None:
         raise HTTPException(status_code=404, detail="Single sign-on is not configured")
     return service
 
 
 def _client_key(request: Request) -> str:
+    """Identify the caller by client IP for throttling the login flow."""
     return request.client.host if request.client else "unknown"
 
 
 def _secure_cookies() -> bool:
+    """Mark cookies ``Secure`` everywhere except development and test."""
     return get_settings().app_env.lower() not in {"development", "test"}
 
 
 def _clear_state_cookie(response: Response) -> None:
+    """Delete the short-lived OIDC state cookie from the browser."""
     response.delete_cookie(
         key=STATE_COOKIE,
         httponly=True,
@@ -57,6 +61,7 @@ def login_methods(service: OidcDependency) -> dict[str, bool]:
 
 @router.get("/auth/oidc/login", status_code=302)
 def oidc_login(request: Request, service: OidcDependency) -> RedirectResponse:
+    """Redirect the browser to the identity provider and set the state cookie."""
     oidc = _require_oidc(service)
     try:
         authorization = oidc.begin(_client_key(request))
@@ -86,6 +91,7 @@ def oidc_callback(
     state: Annotated[str | None, Query(max_length=512)] = None,
     error: Annotated[str | None, Query(max_length=256)] = None,
 ) -> Response:
+    """Finish single sign-on: verify state and code, then issue the normal session."""
     oidc = _require_oidc(service)
     try:
         if error:  # the provider refused, or the person cancelled

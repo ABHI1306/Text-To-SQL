@@ -22,24 +22,29 @@ _POLICY_COLUMNS = (
 
 
 class PostgresGovernanceRepository:
+    """Stores audit events and row policies in the metadata database."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         # The API is configured with a SQLAlchemy-style URL; psycopg wants a plain one.
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[DictRow]:
+        """Open a connection that returns rows as dicts."""
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     # ------------------------------------------------------------------ audit
 
     def append(self, event: AuditEvent) -> None:
+        """Append one audit event."""
         with self._connect() as connection, connection.cursor() as cursor:
             _insert_audit(cursor, event)
 
     def query(
         self, filters: AuditFilter, *, limit: int, before_id: int | None = None
     ) -> AuditPage:
+        """Return a filtered, newest-first page of audit events with a next cursor."""
         clauses: list[str] = []
         params: list[object] = []
         for column, value in (
@@ -86,6 +91,7 @@ class PostgresGovernanceRepository:
     def list_policies(
         self, project_id: str, *, enabled_only: bool = False
     ) -> list[StoredPolicy]:
+        """List a project's row policies, optionally only enabled ones."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -98,6 +104,7 @@ class PostgresGovernanceRepository:
             return [_stored_policy(row) for row in cursor.fetchall()]
 
     def get_policy(self, project_id: str, policy_id: str) -> StoredPolicy | None:
+        """Return one policy scoped to its project, or ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_POLICY_COLUMNS} FROM row_policies "
@@ -116,6 +123,7 @@ class PostgresGovernanceRepository:
         actor_id: str,
         audit: AuditEvent,
     ) -> StoredPolicy:
+        """Insert a policy and its audit event in one transaction."""
         policy_id = str(uuid4())
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -153,6 +161,7 @@ class PostgresGovernanceRepository:
         actor_id: str,
         audit: AuditEvent,
     ) -> StoredPolicy | None:
+        """Update a policy and audit it in one transaction; ``None`` if missing."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
@@ -180,6 +189,7 @@ class PostgresGovernanceRepository:
         return _stored_policy(row) if row else None
 
     def delete_policy(self, project_id: str, policy_id: str, *, audit: AuditEvent) -> bool:
+        """Delete a policy and audit it in one transaction; true if removed."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM row_policies WHERE project_id = %s::uuid AND id = %s::uuid",
@@ -191,12 +201,14 @@ class PostgresGovernanceRepository:
         return deleted
 
     def known_attribute_keys(self) -> frozenset[str]:
+        """Return the user attribute keys in use, for validating policy predicates."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT DISTINCT key FROM user_attributes")
             return frozenset(str(row["key"]) for row in cursor.fetchall())
 
 
 def _insert_audit(cursor: psycopg.Cursor[DictRow], event: AuditEvent) -> None:
+    """Insert an audit event with JSON-safe details using the caller's cursor."""
     cursor.execute(
         """
         INSERT INTO audit_events (actor_id, action, resource_type, resource_id, details)
@@ -213,6 +225,7 @@ def _insert_audit(cursor: psycopg.Cursor[DictRow], event: AuditEvent) -> None:
 
 
 def _with_resource(event: AuditEvent, resource_id: str) -> AuditEvent:
+    """Copy an audit event with the resource id filled in."""
     return AuditEvent(
         actor_id=event.actor_id,
         action=event.action,
@@ -223,6 +236,7 @@ def _with_resource(event: AuditEvent, resource_id: str) -> AuditEvent:
 
 
 def _stored_policy(row: DictRow) -> StoredPolicy:
+    """Convert a database row to a ``StoredPolicy`` (re-validating the policy)."""
     applies_to = cast(dict[str, object], row["applies_to"] or {})
     policy = RowPolicy.model_validate(
         {

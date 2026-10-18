@@ -1,3 +1,5 @@
+"""Authentication: password and directory login, refresh rotation, access tokens and limits."""
+
 from __future__ import annotations
 
 import hashlib
@@ -45,9 +47,11 @@ class PasswordPolicyError(ValueError):
 
 
 class LocalRateLimiter:
+    """In-process sliding-window limiter for failed attempts, keyed per address or account."""
     def __init__(
         self, *, max_failures: int, window_seconds: int, address_multiplier: int = 1
     ) -> None:
+        """Set the failure budget per window; ``address_multiplier`` widens it for ``ip:`` keys."""
         self._max_failures = max_failures
         # Behind a proxy many people share one address, so an address may fail more often than
         # one account before it is refused; the per-account limit is what stops guessing.
@@ -57,6 +61,7 @@ class LocalRateLimiter:
         self._lock = Lock()
 
     def allow(self, keys: tuple[str, ...], now: float | None = None) -> bool:
+        """True while every key is still under its limit; expired attempts are dropped first."""
         current = time.monotonic() if now is None else now
         with self._lock:
             for key in keys:
@@ -71,6 +76,7 @@ class LocalRateLimiter:
             return True
 
     def record_failure(self, keys: tuple[str, ...], now: float | None = None) -> None:
+        """Record one failed attempt against each key."""
         current = time.monotonic() if now is None else now
         with self._lock:
             for key in keys:
@@ -80,12 +86,14 @@ class LocalRateLimiter:
                 attempts.append(current)
 
     def clear(self, keys: tuple[str, ...]) -> None:
+        """Forget all recorded attempts for the keys (after a successful login)."""
         with self._lock:
             for key in keys:
                 self._attempts.pop(key, None)
 
 
 class AuthService:
+    """Issues and checks sessions; every refusal is generic so callers cannot probe accounts."""
     def __init__(
         self,
         repository: AuthRepository,
@@ -99,6 +107,7 @@ class AuthService:
         directory: DirectoryPort | None = None,
         identity_repository: IdentityRepository | None = None,
     ) -> None:
+        """Configure token lifetimes and lockout; the JWT secret must be at least 32 characters."""
         if len(jwt_secret) < 32:
             raise ValueError("JWT_SECRET must contain at least 32 characters")
         self._repository = repository
@@ -123,6 +132,11 @@ class AuthService:
         self._context_cache_lock = Lock()
 
     def login(self, username: str, password: str, client_key: str) -> LoginResult:
+        """Verify a local or LDAP login and open a session.
+
+        A dummy hash is verified for unknown users so timing does not reveal which usernames
+        exist; failures are rate-limited, counted toward lockout and audited.
+        """
         normalized_username = username.strip().casefold()
         rate_keys = (f"ip:{client_key}", f"user:{normalized_username}")
         now = datetime.now(UTC)
@@ -217,6 +231,7 @@ class AuthService:
         )
 
     def external_login_allowed(self, client_key: str) -> bool:
+        """False once this address has failed too often to try a federated login."""
         return self._limiter.allow((f"ip:{client_key}",))
 
     def _refuse(
@@ -227,6 +242,7 @@ class AuthService:
         reason: str,
         actor: str | None = None,
     ) -> AuthenticationError:
+        """Count and audit a refused external login and return the generic error to raise."""
         self._limiter.record_failure(rate_keys)
         self._repository.append_auth_audit(
             actor, "login_failed", username, {"source": source, "reason": reason}
@@ -245,6 +261,10 @@ class AuthService:
         *,
         subject: str | None = None,
     ) -> LoginResult:
+        """Map groups to a role, provision the account, check it is usable and open a session.
+
+        Every refusal reason is audited but the caller only sees the generic error.
+        """
         if self._identity is None:
             raise self._refuse(source, username, rate_keys, "identity_mappings_unavailable")
         role_name = resolve_role(groups, self._identity.get_identity_mappings(source))
@@ -273,6 +293,7 @@ class AuthService:
     def _open_session(
         self, user_id: str, username: str, source: str, now: datetime
     ) -> LoginResult:
+        """Create a session with a fresh refresh-token family and issue the access token."""
         context = self._repository.get_auth_context(user_id)
         if context is None:
             raise AuthenticationError("Invalid username or password")
@@ -298,6 +319,7 @@ class AuthService:
         )
 
     def refresh(self, refresh_token: str) -> LoginResult:
+        """Rotate a refresh token and issue new tokens; an invalid or reused one is audited."""
         now = datetime.now(UTC)
         new_refresh_token = secrets.token_urlsafe(32)
         new_session_id = secrets.token_hex(16)
@@ -327,10 +349,16 @@ class AuthService:
         )
 
     def logout(self, refresh_token: str) -> None:
+        """Revoke the session family that owns this refresh token."""
         now = datetime.now(UTC)
         self._repository.revoke_refresh_token(_token_hash(refresh_token), now)
 
     def authenticate_access_token(self, token: str, *, allow_password_change: bool = False) -> AuthContext:
+        """Validate a bearer token and return the caller's context.
+
+        Checks signature, issuer and required claims, that the session is still alive, and that a
+        temporary password has been changed unless ``allow_password_change`` is set.
+        """
         try:
             claims: dict[str, Any] = jwt.decode(
                 token,
@@ -354,6 +382,7 @@ class AuthService:
         return replace(context, session_id=str(claims["jti"]))
 
     def _cached_auth_context(self, user_id: str) -> AuthContext | None:
+        """The user's context from a 30 second cache, so most requests skip the database."""
         now = time.monotonic()
         with self._context_cache_lock:
             cached = self._context_cache.get(user_id)
@@ -376,6 +405,7 @@ class AuthService:
         return True
 
     def invalidate_auth_context(self, user_id: str) -> None:
+        """Drop one user's cached context so role or status changes apply immediately."""
         with self._context_cache_lock:
             self._context_cache.pop(user_id, None)
 
@@ -391,6 +421,7 @@ class AuthService:
         current_password: str,
         new_password: str,
     ) -> None:
+        """Replace the password after verifying the current one; other sessions are revoked."""
         _validate_new_password(current_password, new_password)
         user = self._repository.get_user_by_username(context.username.casefold())
         if (
@@ -418,11 +449,13 @@ class AuthService:
         )
 
     def create_password_hash(self, password: str) -> str:
+        """Hash a new password after enforcing the length policy."""
         return hash_password(password)
 
     def _create_access_token(
         self, context: AuthContext, session_id: str, now: datetime
     ) -> str:
+        """Sign a short-lived HS256 token whose ``jti`` is the session id."""
         return jwt.encode(
             {
                 "sub": context.user_id,
@@ -437,6 +470,7 @@ class AuthService:
         )
 
     def _verify_password(self, password_hash: str, password: str) -> bool:
+        """True only when the password matches; any hash error counts as a mismatch."""
         try:
             return self._hasher.verify(password_hash, password)
         except (VerifyMismatchError, VerificationError, InvalidHashError):
@@ -444,20 +478,24 @@ class AuthService:
 
 
 def _token_hash(token: str) -> str:
+    """SHA-256 hex of a refresh token; only the hash is stored."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def hash_password(password: str) -> str:
+    """Argon2 hash of a password that meets the minimum length."""
     _validate_password_length(password)
     return PasswordHasher().hash(password)
 
 
 def _validate_password_length(password: str) -> None:
+    """Raise ``PasswordPolicyError`` when the password is shorter than the minimum."""
     if len(password) < MIN_PASSWORD_LENGTH:
         raise PasswordPolicyError("Password must be at least 12 characters")
 
 
 def _validate_new_password(current_password: str, new_password: str) -> None:
+    """Require a long enough new password that differs from the current one."""
     _validate_password_length(new_password)
     if secrets.compare_digest(current_password, new_password):
         raise PasswordPolicyError("New password must differ from the current password")

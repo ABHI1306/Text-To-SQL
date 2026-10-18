@@ -36,6 +36,7 @@ def render_prompt_context(
 
 
 def _render_model(model: MdlModel) -> str:
+    """A model as a ``CREATE TABLE`` block with its description as a comment."""
     lines: list[str] = []
     if model.description.strip():
         lines.append(f"-- {_one_line(model.description)}")
@@ -46,6 +47,7 @@ def _render_model(model: MdlModel) -> str:
 
 
 def _render_column(model: MdlModel, column: MdlColumn) -> str:
+    """One column line: logical type, primary-key and calculated markers, description."""
     parts = [f"{column.name} {column.type.upper()}"]
     if column.is_primary_key or model.primary_key == column.name:
         parts.append("PRIMARY KEY")
@@ -57,6 +59,7 @@ def _render_column(model: MdlModel, column: MdlColumn) -> str:
 
 
 def _render_relationship(relationship: Relationship) -> str:
+    """A relationship as a single SQL comment line."""
     left, right = relationship.models
     return (
         f"-- Relationship {relationship.name}: {left} to {right} "
@@ -65,6 +68,7 @@ def _render_relationship(relationship: Relationship) -> str:
 
 
 def _render_metric(metric: Metric) -> str:
+    """A metric as comment lines listing its dimensions and measures."""
     lines = [f"-- Metric {metric.name} (over {metric.base_object}), usable like a table:"]
     if metric.description.strip():
         lines.append(f"--   {_one_line(metric.description)}")
@@ -78,4 +82,5 @@ def _render_metric(metric: Metric) -> str:
 
 
 def _one_line(text: str) -> str:
+    """Collapse all whitespace so ``text`` fits on one line."""
     return " ".join(text.split())

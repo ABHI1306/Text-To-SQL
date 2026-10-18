@@ -25,15 +25,18 @@ MAX_TITLE = 120
 
 @dataclass(frozen=True)
 class ChartValidation:
+    """Outcome of checking a chart spec: the sanitized spec, or None with the reasons."""
     spec: dict[str, Any] | None
     errors: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
+        """True when the spec passed every check."""
         return self.spec is not None
 
 
 def _is_number(value: object) -> bool:
+    """True for real numbers; booleans are excluded."""
     return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
 
 
@@ -111,6 +114,7 @@ def _channel(
     index: Mapping[str, int],
     rows: Sequence[Sequence[object]],
 ) -> tuple[dict[str, str] | None, list[str]]:
+    """Check one encoding channel against the allow-list and result columns; (clean, errors)."""
     if not isinstance(definition, Mapping):
         return None, [f"channel {channel} is not an object"]
     errors = [f"unknown key in {channel}: {key}" for key in definition if key not in _CHANNEL_KEYS]
@@ -148,6 +152,7 @@ _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?|\.\d+")
 
 
 def _normal(text: str) -> str:
+    """Canonical text of a number: no thousands commas and no trailing zeros."""
     text = text.replace(",", "")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
@@ -155,10 +160,12 @@ def _normal(text: str) -> str:
 
 
 def _numbers_in(text: str) -> set[str]:
+    """The normalized numbers that appear in free text."""
     return {_normal(match) for match in _NUMBER.findall(text)}
 
 
 def _cell_numbers(value: object) -> set[str]:
+    """The normalized forms a cell value could be quoted as (exact and rounded to 0-2 places)."""
     if value is None or isinstance(value, bool):
         return set()
     if _is_number(value):

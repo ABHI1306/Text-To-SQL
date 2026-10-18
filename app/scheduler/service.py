@@ -21,9 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
+    """Runs a background poller that hands claimed slots to a thread pool."""
     def __init__(
         self, runner: SlotRunner, *, poll_seconds: float = 15.0, max_concurrent_jobs: int = 4
     ) -> None:
+        """Create the background scheduler with a bounded thread pool; nothing runs yet."""
         self._runner = runner
         self._poll_seconds = poll_seconds
         self._scheduler = BackgroundScheduler(
@@ -33,6 +35,7 @@ class SchedulerService:
         )
 
     def start(self) -> None:
+        """Register the interval poll job (first poll immediately) and start the scheduler."""
         self._scheduler.add_job(
             self.poll_once,
             "interval",
@@ -45,6 +48,7 @@ class SchedulerService:
         logger.info("Scheduler started", extra={"worker_id": self._runner.worker_id})
 
     def poll_once(self) -> int:
+        """Claim due slots and submit them; returns the count, or 0 if the poll failed."""
         try:
             return self._runner.poll(self._submit)
         except Exception:
@@ -52,6 +56,7 @@ class SchedulerService:
             return 0
 
     def _submit(self, claim: Claim) -> None:
+        """Queue one claimed slot as a one-off job on the thread pool."""
         self._scheduler.add_job(
             self._runner.execute,
             args=[claim],
@@ -60,5 +65,6 @@ class SchedulerService:
         )
 
     def stop(self, *, wait: bool = True) -> None:
+        """Shut the scheduler down, optionally waiting for running jobs."""
         if self._scheduler.running:
             self._scheduler.shutdown(wait=wait)

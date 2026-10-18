@@ -28,12 +28,15 @@ _PAIR = (
 
 
 class PostgresKnowledgeRepository:
+    """Stores instructions, SQL pairs and feedback; each write is audited in its transaction."""
     def __init__(self, dsn: str) -> None:
+        """Store the metadata DSN, normalising the SQLAlchemy-style scheme."""
         if not dsn:
             raise ValueError("A metadata database URL is required")
         self._dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[DictRow]:
+        """Open a connection that returns rows as dicts."""
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     # ------------------------------------------------------------ instructions
@@ -41,6 +44,7 @@ class PostgresKnowledgeRepository:
     def list_instructions(
         self, project_id: str, *, active_only: bool = False
     ) -> list[Instruction]:
+        """List a project's instructions, optionally only active ones."""
         with self._connect() as connection:
             rows = connection.execute(
                 f"SELECT {_INSTRUCTION} FROM project_instructions"
@@ -50,6 +54,7 @@ class PostgresKnowledgeRepository:
         return [_instruction(row) for row in rows]
 
     def get_instruction(self, project_id: str, instruction_id: str) -> Instruction | None:
+        """Return one instruction scoped to its project, or ``None``."""
         with self._connect() as connection:
             row = connection.execute(
                 f"SELECT {_INSTRUCTION} FROM project_instructions"
@@ -59,6 +64,7 @@ class PostgresKnowledgeRepository:
         return _instruction(row) if row else None
 
     def create_instruction(self, instruction: Instruction, *, audit: AuditEvent) -> Instruction:
+        """Store an instruction and its audit event together."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO project_instructions (id, project_id, text, active, created_by)"
@@ -86,6 +92,7 @@ class PostgresKnowledgeRepository:
         active: bool | None,
         audit: AuditEvent,
     ) -> Instruction | None:
+        """Change text and/or active flag (``None`` keeps a field) with an audit event."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "UPDATE project_instructions SET text = COALESCE(%s, text),"
@@ -102,6 +109,7 @@ class PostgresKnowledgeRepository:
     def delete_instruction(
         self, project_id: str, instruction_id: str, *, audit: AuditEvent
     ) -> bool:
+        """Delete an instruction with an audit event; true if it existed."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM project_instructions WHERE project_id = %s::uuid AND id = %s::uuid",
@@ -115,6 +123,7 @@ class PostgresKnowledgeRepository:
     # ------------------------------------------------------------------- pairs
 
     def list_pairs(self, project_id: str, *, status: PairStatus | None = None) -> list[SqlPair]:
+        """List a project's SQL pairs, optionally filtered by status."""
         with self._connect() as connection:
             rows = connection.execute(
                 f"SELECT {_PAIR} FROM sql_pairs WHERE project_id = %s::uuid"
@@ -124,6 +133,7 @@ class PostgresKnowledgeRepository:
         return [_pair(row) for row in rows]
 
     def get_pair(self, project_id: str, pair_id: str) -> SqlPair | None:
+        """Return one SQL pair scoped to its project, or ``None``."""
         with self._connect() as connection:
             row = connection.execute(
                 f"SELECT {_PAIR} FROM sql_pairs WHERE project_id = %s::uuid AND id = %s::uuid",
@@ -134,6 +144,7 @@ class PostgresKnowledgeRepository:
     def get_pairs(
         self, project_id: str, pair_ids: Sequence[str], *, status: PairStatus
     ) -> list[SqlPair]:
+        """Return the pairs with the given ids and status, scoped to the project."""
         if not pair_ids:
             return []
         with self._connect() as connection:
@@ -147,6 +158,7 @@ class PostgresKnowledgeRepository:
     def find_duplicate(
         self, project_id: str, question: str, logical_sql: str
     ) -> SqlPair | None:
+        """Find a proposed or approved pair with the same question and SQL."""
         with self._connect() as connection:
             row = connection.execute(
                 f"SELECT {_PAIR} FROM sql_pairs WHERE project_id = %s::uuid"
@@ -157,6 +169,7 @@ class PostgresKnowledgeRepository:
         return _pair(row) if row else None
 
     def create_pair(self, pair: SqlPair, *, audit: AuditEvent) -> SqlPair:
+        """Store a SQL pair and its audit event together."""
         with self._connect() as connection, connection.cursor() as cursor:
             _insert_pair(cursor, pair)
             _insert_audit(cursor, audit)
@@ -171,6 +184,7 @@ class PostgresKnowledgeRepository:
         actor_id: str,
         audit: AuditEvent,
     ) -> SqlPair | None:
+        """Approve or reject a still-proposed pair with an audit event; else ``None``."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "UPDATE sql_pairs SET status = %s, decided_by = %s::uuid, decided_at = now()"
@@ -184,6 +198,7 @@ class PostgresKnowledgeRepository:
         return _pair(row) if row else None
 
     def delete_pair(self, project_id: str, pair_id: str, *, audit: AuditEvent) -> bool:
+        """Delete a SQL pair with an audit event; true if it existed."""
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM sql_pairs WHERE project_id = %s::uuid AND id = %s::uuid",
@@ -202,6 +217,7 @@ class PostgresKnowledgeRepository:
         pair_id: str | None,
         audits: Sequence[AuditEvent],
     ) -> None:
+        """Store feedback, any pair it creates, and the audit events together."""
         with self._connect() as connection, connection.cursor() as cursor:
             if pair is not None:
                 _insert_pair(cursor, pair)
@@ -226,6 +242,7 @@ class PostgresKnowledgeRepository:
 
 
 def _insert_pair(cursor: psycopg.Cursor[DictRow], pair: SqlPair) -> None:
+    """Insert a SQL pair using the caller's cursor (so it joins their transaction)."""
     cursor.execute(
         "INSERT INTO sql_pairs (id, project_id, question, logical_sql, status, source,"
         " proposed_by, decided_by, decided_at) VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s,"
@@ -245,6 +262,7 @@ def _insert_pair(cursor: psycopg.Cursor[DictRow], pair: SqlPair) -> None:
 
 
 def _instruction(row: Any) -> Instruction:
+    """Convert a database row to an ``Instruction``."""
     return Instruction(
         id=row["id"],
         project_id=row["project_id"],
@@ -256,6 +274,7 @@ def _instruction(row: Any) -> Instruction:
 
 
 def _pair(row: Any) -> SqlPair:
+    """Convert a database row to a ``SqlPair``."""
     return SqlPair(
         id=row["id"],
         project_id=row["project_id"],
@@ -274,6 +293,7 @@ class InMemoryKnowledgeRepository:
     """Process-local repository for tests; same project scoping and audit-with-write contract."""
 
     def __init__(self) -> None:
+        """Create empty stores for instructions, pairs, feedback and audit events."""
         self.instructions: dict[str, Instruction] = {}
         self.pairs: dict[str, SqlPair] = {}
         self.feedback: list[Feedback] = []
@@ -282,6 +302,7 @@ class InMemoryKnowledgeRepository:
     def list_instructions(
         self, project_id: str, *, active_only: bool = False
     ) -> list[Instruction]:
+        """List a project's instructions, optionally only active ones."""
         return [
             i
             for i in self.instructions.values()
@@ -289,10 +310,12 @@ class InMemoryKnowledgeRepository:
         ]
 
     def get_instruction(self, project_id: str, instruction_id: str) -> Instruction | None:
+        """Return one instruction scoped to its project, or ``None``."""
         found = self.instructions.get(instruction_id)
         return found if found and found.project_id == project_id else None
 
     def create_instruction(self, instruction: Instruction, *, audit: AuditEvent) -> Instruction:
+        """Store an instruction and its audit event together."""
         self.instructions[instruction.id] = instruction
         self.audit.append(audit)
         return instruction
@@ -306,6 +329,7 @@ class InMemoryKnowledgeRepository:
         active: bool | None,
         audit: AuditEvent,
     ) -> Instruction | None:
+        """Change text and/or active flag (``None`` keeps a field) with an audit event."""
         current = self.get_instruction(project_id, instruction_id)
         if current is None:
             return None
@@ -322,6 +346,7 @@ class InMemoryKnowledgeRepository:
     def delete_instruction(
         self, project_id: str, instruction_id: str, *, audit: AuditEvent
     ) -> bool:
+        """Delete an instruction with an audit event; true if it existed."""
         if self.get_instruction(project_id, instruction_id) is None:
             return False
         del self.instructions[instruction_id]
@@ -329,6 +354,7 @@ class InMemoryKnowledgeRepository:
         return True
 
     def list_pairs(self, project_id: str, *, status: PairStatus | None = None) -> list[SqlPair]:
+        """List a project's SQL pairs, optionally filtered by status."""
         return [
             p
             for p in self.pairs.values()
@@ -336,12 +362,14 @@ class InMemoryKnowledgeRepository:
         ]
 
     def get_pair(self, project_id: str, pair_id: str) -> SqlPair | None:
+        """Return one SQL pair scoped to its project, or ``None``."""
         found = self.pairs.get(pair_id)
         return found if found and found.project_id == project_id else None
 
     def get_pairs(
         self, project_id: str, pair_ids: Sequence[str], *, status: PairStatus
     ) -> list[SqlPair]:
+        """Return the pairs with the given ids and status, scoped to the project."""
         return [
             p
             for p in (self.get_pair(project_id, i) for i in pair_ids)
@@ -351,6 +379,7 @@ class InMemoryKnowledgeRepository:
     def find_duplicate(
         self, project_id: str, question: str, logical_sql: str
     ) -> SqlPair | None:
+        """Find a proposed or approved pair with the same question and SQL."""
         for pair in self.list_pairs(project_id):
             if (
                 pair.question == question
@@ -361,6 +390,7 @@ class InMemoryKnowledgeRepository:
         return None
 
     def create_pair(self, pair: SqlPair, *, audit: AuditEvent) -> SqlPair:
+        """Store a SQL pair and its audit event together."""
         self.pairs[pair.id] = pair
         self.audit.append(audit)
         return pair
@@ -374,6 +404,7 @@ class InMemoryKnowledgeRepository:
         actor_id: str,
         audit: AuditEvent,
     ) -> SqlPair | None:
+        """Approve or reject a still-proposed pair with an audit event; else ``None``."""
         current = self.get_pair(project_id, pair_id)
         if current is None or current.status != "proposed":
             return None
@@ -385,6 +416,7 @@ class InMemoryKnowledgeRepository:
         return decided
 
     def delete_pair(self, project_id: str, pair_id: str, *, audit: AuditEvent) -> bool:
+        """Delete a SQL pair with an audit event; true if it existed."""
         if self.get_pair(project_id, pair_id) is None:
             return False
         del self.pairs[pair_id]
@@ -399,6 +431,7 @@ class InMemoryKnowledgeRepository:
         pair_id: str | None,
         audits: Sequence[AuditEvent],
     ) -> None:
+        """Store feedback, any pair it creates, and the audit events together."""
         if pair is not None:
             self.pairs[pair.id] = pair
         self.feedback.append(feedback)

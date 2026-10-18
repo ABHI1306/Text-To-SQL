@@ -38,6 +38,7 @@ GiveFeedbackContext = Annotated[AuthContext, Depends(require_capability("give_fe
 
 
 class InstructionRequest(BaseModel):
+    """Body for a new project instruction: its text and whether it is active."""
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=1000, pattern=r"\S")
@@ -45,6 +46,7 @@ class InstructionRequest(BaseModel):
 
 
 class InstructionPatch(BaseModel):
+    """Partial update of an instruction; at least one field is required."""
     model_config = ConfigDict(extra="forbid")
 
     text: str | None = Field(default=None, min_length=1, max_length=1000, pattern=r"\S")
@@ -52,12 +54,14 @@ class InstructionPatch(BaseModel):
 
     @model_validator(mode="after")
     def _something(self) -> InstructionPatch:
+        """Require at least one of ``text`` or ``active``."""
         if self.text is None and self.active is None:
             raise ValueError("Give text or active")
         return self
 
 
 class SqlPairRequest(BaseModel):
+    """A question and the logical SQL that answers it."""
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000, pattern=r"\S")
@@ -65,24 +69,28 @@ class SqlPairRequest(BaseModel):
 
 
 class FeedbackRequest(SqlPairRequest):
+    """Rating on an answer, anchored to a message or a thread."""
     message_id: str | None = Field(default=None, min_length=1, max_length=100)
     thread_id: UUID | None = None
     rating: Literal["up", "down"]
 
     @model_validator(mode="after")
     def _anchored(self) -> FeedbackRequest:
+        """Require ``message_id`` or ``thread_id`` so feedback ties to a conversation."""
         if self.message_id is None and self.thread_id is None:
             raise ValueError("Give message_id or thread_id")
         return self
 
 
 class RejectRequest(BaseModel):
+    """Body for rejecting a proposed SQL pair, with an optional reason."""
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(default="", max_length=500)
 
 
 def _instruction_json(item: Instruction) -> dict[str, object]:
+    """Serialise an instruction into its API shape."""
     return {
         "id": item.id,
         "text": item.text,
@@ -93,6 +101,7 @@ def _instruction_json(item: Instruction) -> dict[str, object]:
 
 
 def _pair_json(pair: SqlPair) -> dict[str, object]:
+    """Serialise a SQL pair into its API shape."""
     return {
         "id": pair.id,
         "question": pair.question,
@@ -129,6 +138,7 @@ def _mapped() -> Iterator[None]:
 
 
 def _deployed_mdl(repository: PostgresMetadataRepository, project_id: UUID) -> Mdl:
+    """Load the project's deployed MDL; 409 when none is deployed."""
     try:
         return load_deployed_mdl(repository, str(project_id))[1]
     except NoDeployedModel as error:
@@ -142,6 +152,7 @@ def _deployed_mdl(repository: PostgresMetadataRepository, project_id: UUID) -> M
 def list_instructions(
     project_id: UUID, context: ManageKnowledgeContext, knowledge: KnowledgeDependency
 ) -> list[dict[str, object]]:
+    """List the project's instructions (requires ``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         return [_instruction_json(i) for i in knowledge.list_instructions(str(project_id))]
@@ -154,6 +165,7 @@ def create_instruction(
     context: ManageKnowledgeContext,
     knowledge: KnowledgeDependency,
 ) -> dict[str, object]:
+    """Add an instruction used to guide SQL generation (``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         return _instruction_json(
@@ -171,6 +183,7 @@ def update_instruction(
     context: ManageKnowledgeContext,
     knowledge: KnowledgeDependency,
 ) -> dict[str, object]:
+    """Edit an instruction's text or active flag (``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         return _instruction_json(
@@ -194,6 +207,7 @@ def delete_instruction(
     context: ManageKnowledgeContext,
     knowledge: KnowledgeDependency,
 ) -> Response:
+    """Delete an instruction (requires ``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         knowledge.delete_instruction(str(project_id), str(instruction_id), actor_id=context.user_id)
@@ -207,6 +221,7 @@ def delete_instruction(
 def list_sql_pairs(
     project_id: UUID, context: ManageKnowledgeContext, knowledge: KnowledgeDependency
 ) -> list[dict[str, object]]:
+    """List the project's approved question and SQL pairs (``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         return [_pair_json(p) for p in knowledge.list_pairs(str(project_id), status="approved")]
@@ -241,6 +256,7 @@ def delete_sql_pair(
     context: ManageKnowledgeContext,
     knowledge: KnowledgeDependency,
 ) -> Response:
+    """Delete an approved SQL pair (requires ``manage_knowledge``)."""
     require_project_access(context, project_id)
     with _mapped():
         knowledge.delete_pair(str(project_id), str(pair_id), actor_id=context.user_id)
@@ -283,6 +299,7 @@ def give_feedback(
 def list_proposals(
     project_id: UUID, context: ApprovePairsContext, knowledge: KnowledgeDependency
 ) -> list[dict[str, object]]:
+    """List pending pairs with their nearest approved pair (``approve_pairs``)."""
     require_project_access(context, project_id)
     with _mapped():
         return [
@@ -299,6 +316,7 @@ def approve_proposal(
     repository: RepositoryDependency,
     knowledge: KnowledgeDependency,
 ) -> dict[str, object]:
+    """Approve a proposed pair, re-checking its SQL against the deployed MDL."""
     require_project_access(context, project_id)
     mdl = _deployed_mdl(repository, project_id)
     with _mapped():
@@ -315,6 +333,7 @@ def reject_proposal(
     context: ApprovePairsContext,
     knowledge: KnowledgeDependency,
 ) -> dict[str, object]:
+    """Reject a proposed pair with an optional reason (``approve_pairs``)."""
     require_project_access(context, project_id)
     with _mapped():
         return _pair_json(
