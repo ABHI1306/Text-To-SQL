@@ -566,6 +566,31 @@ function App() {
     setNotice(null)
   }
 
+  async function deleteProject(project: { id: string; name: string }) {
+    if (!accessToken) return
+    if (!window.confirm(`Delete project "${project.name}"? Its dashboards, saved questions, chats, schedules, policies and models are removed too. The database itself is not touched. This cannot be undone.`)) return
+    try {
+      await callApi(apiRequest, `/api/v1/projects/${project.id}`, 'DELETE')
+      const next = await loadProfile(accessToken)
+      setProfile(next)
+      if (project.id === selectedProjectId) {
+        const fallback = next.projects[0]?.id ?? null
+        setSelectedId(fallback)
+        if (fallback) storeProject(fallback)
+        setRun(null)
+        setQueryError(null)
+        setQuery('')
+        setActiveThread(null)
+        setThreads([])
+        setTurns([])
+        setThreadId(null)
+      }
+      setNotice(`Project ${project.name} deleted.`)
+    } catch (reason: unknown) {
+      setNotice(reason instanceof Error ? reason.message : 'Could not delete the project')
+    }
+  }
+
   function startNewProject() {
     setSwitcherOpen(false)
     setAddingProject(true)
@@ -716,7 +741,7 @@ function App() {
             {switcherOpen && (
               <ul aria-label="Projects" className="project-menu" role="listbox">
                 {(profile?.projects ?? []).map((project) => (
-                  <li key={project.id} role="presentation">
+                  <li className="project-menu-row" key={project.id} role="presentation">
                     <button
                       aria-selected={project.id === selectedProjectId}
                       className="project-menu-item"
@@ -727,6 +752,15 @@ function App() {
                       <span>{project.name}</span>
                       <small>{projectStatus(project)}</small>
                     </button>
+                    {hasCapability(profile?.capabilities ?? [], 'manage_connection') && (
+                      <button
+                        aria-label={`Delete project ${project.name}`}
+                        className="project-menu-delete"
+                        onClick={() => void deleteProject(project)}
+                        title="Delete project"
+                        type="button"
+                      >Delete</button>
+                    )}
                   </li>
                 ))}
                 {hasCapability(profile?.capabilities ?? [], 'manage_connection') && (

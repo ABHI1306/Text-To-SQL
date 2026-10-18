@@ -417,6 +417,20 @@ class PostgresMetadataRepository:
                 (project_id, owner_id),
             )
 
+    def delete_project(self, project_id: str) -> list[int]:
+        """Remove a project and everything it owns; returns its MDL version numbers."""
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM projects WHERE id = %s::uuid FOR UPDATE", (project_id,))
+            if cursor.fetchone() is None:
+                raise KeyError(f"Project {project_id} does not exist")
+            cursor.execute(
+                "SELECT version_number FROM mdl_versions WHERE project_id = %s::uuid",
+                (project_id,),
+            )
+            versions = [int(cast(int, row["version_number"])) for row in cursor.fetchall()]
+            cursor.execute("DELETE FROM projects WHERE id = %s::uuid", (project_id,))
+            return versions
+
     def get_project_connection(self, project_id: str) -> dict[str, object] | None:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -827,6 +841,40 @@ class PostgresMetadataRepository:
             )
             if cursor.rowcount == 0:
                 raise KeyError("User does not exist")
+
+    def delete_user(self, user_id: str) -> None:
+        """Remove an account. Owned data cascades; authorship pointers are cleared."""
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE id = %s::uuid FOR UPDATE", (user_id,))
+            if cursor.fetchone() is None:
+                raise KeyError("User does not exist")
+            for table, column in (
+                ("mdl_versions", "deployed_by"),
+                ("row_policies", "updated_by"),
+                ("project_instructions", "created_by"),
+                ("sql_pairs", "proposed_by"),
+                ("sql_pairs", "decided_by"),
+            ):
+                cursor.execute(
+                    f"UPDATE {table} SET {column} = NULL WHERE {column} = %s::uuid",  # noqa: S608
+                    (user_id,),
+                )
+            cursor.execute("DELETE FROM users WHERE id = %s::uuid", (user_id,))
+
+    def count_users_with_capability(self, capability: str, exclude_user_id: str) -> int:
+        """Active accounts, other than one user, whose role holds the capability."""
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*) AS total
+                FROM users JOIN role_capabilities ON role_capabilities.role_id = users.role_id
+                WHERE role_capabilities.capability = %s AND users.status = 'active'
+                  AND users.id <> %s::uuid
+                """,
+                (capability, exclude_user_id),
+            )
+            row = cursor.fetchone()
+            return int(row["total"]) if row else 0
 
     def set_user_role(self, user_id: str, role_name: str) -> None:
         with self._connect() as connection, connection.cursor() as cursor:

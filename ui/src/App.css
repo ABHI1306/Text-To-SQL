@@ -2979,6 +2979,32 @@ td:first-child {
   background: #e9ebfa;
 }
 
+.project-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.project-menu-row .project-menu-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-menu-delete {
+  padding: 3px 7px;
+  border: 1px solid #e3c5c5;
+  border-radius: 5px;
+  background: transparent;
+  color: #a33a3a;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.project-menu-delete:hover {
+  background: #fbeaea;
+}
+
 .project-menu-add {
   border-top: 1px solid #e6e7ee;
   border-radius: 0 0 5px 5px;

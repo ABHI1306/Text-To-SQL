@@ -194,6 +194,17 @@ function AccountsPanel({ apiRequest, notifyChange }: { apiRequest: ApiRequest; n
                         <button aria-label={`Reset password for ${user.username}`} onClick={() => setResetting(user)} type="button">Reset password</button>
                       )}
                       <button aria-label={`Access and attributes for ${user.username}`} onClick={() => setSelected(user)} type="button">Access</button>
+                      <button
+                        aria-label={`Delete ${user.username}`}
+                        onClick={() => {
+                          if (!window.confirm(`Delete account ${user.username}? Their chats, dashboards and saved questions are removed too. This cannot be undone.`)) return
+                          void act(
+                            () => callApi(apiRequest, `/api/v1/users/${user.id}`, 'DELETE'),
+                            `Account ${user.username} deleted.`,
+                          )
+                        }}
+                        type="button"
+                      >Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -203,22 +214,40 @@ function AccountsPanel({ apiRequest, notifyChange }: { apiRequest: ApiRequest; n
         </table>
       )}
       {resetting && (
-        <ResetPasswordForm
-          apiRequest={apiRequest}
-          user={resetting}
-          onClose={(done) => {
-            setResetting(null)
-            if (done) {
-              users.reload()
-              setMessage({ text: `Password for ${resetting.username} reset. They must change it at next sign-in.`, error: false })
-            }
-          }}
-        />
+        <ModalShell label={`Reset password for ${resetting.username}`} onDismiss={() => setResetting(null)}>
+          <ResetPasswordForm
+            apiRequest={apiRequest}
+            user={resetting}
+            onClose={(done) => {
+              setResetting(null)
+              if (done) {
+                users.reload()
+                setMessage({ text: `Password for ${resetting.username} reset. They must change it at next sign-in.`, error: false })
+              }
+            }}
+          />
+        </ModalShell>
       )}
       {selected && (
-        <UserAccessPanel apiRequest={apiRequest} key={selected.id} notifyChange={notifyChange} onClose={() => setSelected(null)} user={selected} />
+        <ModalShell label={`Access for ${selected.username}`} onDismiss={() => setSelected(null)}>
+          <UserAccessPanel apiRequest={apiRequest} key={selected.id} notifyChange={notifyChange} onClose={() => setSelected(null)} user={selected} />
+        </ModalShell>
       )}
     </>
+  )
+}
+
+/** Shows its children in a modal dialog as soon as it mounts; Esc dismisses it. */
+function ModalShell({ label, onDismiss, children }: { label: string; onDismiss: () => void; children: React.ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const element = dialog.current
+    if (element && !element.open) element.showModal()
+  }, [])
+  return (
+    <dialog aria-label={label} className="admin-dialog" onCancel={onDismiss} ref={dialog}>
+      {children}
+    </dialog>
   )
 }
 

@@ -70,6 +70,30 @@ def unlock_user(
     return {"user_id": str(user_id), "locked": False}
 
 
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: UUID,
+    context: ManageUsersContext,
+    repository: RepositoryDependency,
+    audit: AuditDependency,
+) -> dict[str, object]:
+    if str(user_id) == str(context.user_id):
+        raise HTTPException(status_code=422, detail="You cannot delete your own account")
+    user = _find_user(repository, user_id)
+    _require_not_stronger(context, repository, user)
+    capabilities = repository.get_role_capabilities(str(user["role"])) or frozenset()
+    if "manage_users" in capabilities and not repository.count_users_with_capability(
+        "manage_users", str(user_id)
+    ):
+        raise HTTPException(status_code=409, detail="Cannot delete the last account that can manage users")
+    try:
+        repository.delete_user(str(user_id))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    audit.record(context.user_id, "user_deleted", "user", str(user_id), {"username": user["username"]})
+    return {"user_id": str(user_id), "deleted": True}
+
+
 @router.post("/users/{user_id}/reset-password")
 def reset_user_password(
     user_id: UUID,

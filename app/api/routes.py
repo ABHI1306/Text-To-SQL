@@ -495,6 +495,45 @@ def create_project(
     return {"id": str(project_id), "name": body.display_name, "setup_step": "tables"}
 
 
+@router.delete("/projects/{project_id}", tags=["Projects"])
+def delete_project(
+    project_id: UUID,
+    context: ManageConnectionContext,
+    repository: RepositoryDependency,
+    auth_service: AuthServiceDependency,
+    audit: AuditDependency,
+) -> dict[str, object]:
+    _require_project_access(context, project_id)
+    project = repository.get_project_connection(str(project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        versions = repository.delete_project(str(project_id))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Project not found") from error
+    auth_service.invalidate_all_auth_contexts()
+    # The database rows are gone; search vectors are cleaned up best-effort.
+    cleanup_failed = False
+    try:
+        vector_store = QdrantVectorStoreAdapter(get_settings().qdrant_url)
+        for namespace in (
+            *(str(version) for version in versions),
+            "knowledge:sql_pairs",
+            "knowledge:instructions",
+        ):
+            vector_store.delete_version(str(project_id), namespace)
+    except Exception:  # noqa: BLE001 - orphaned vectors are harmless, the delete already happened
+        cleanup_failed = True
+    audit.record(
+        context.user_id,
+        "project_deleted",
+        "project",
+        str(project_id),
+        {"name": str(project["name"]), "vector_cleanup_failed": cleanup_failed},
+    )
+    return {"id": str(project_id), "deleted": True}
+
+
 @router.get("/projects/{project_id}/setup", tags=["Projects"])
 def get_setup_state(
     project_id: UUID,

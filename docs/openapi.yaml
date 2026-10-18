@@ -201,6 +201,34 @@ paths:
                 $ref: "#/components/schemas/Project"
         "422":
           $ref: "#/components/responses/Error"
+  /projects/{project_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    delete:
+      operationId: deleteProject
+      description: >
+        Deletes the project and everything it owns (dashboards, saved questions, threads, schedules,
+        row policies, model versions, knowledge) and clears its search vectors. The connected database
+        itself is not touched. Audited as `project_deleted`. Needs `manage_connection` and access to
+        the project.
+      responses:
+        "200":
+          description: Project deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, deleted]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  deleted:
+                    type: boolean
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /projects/{project_id}/setup:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -574,6 +602,43 @@ paths:
         "201":
           description: Local account created; password change is required at first sign-in.
         "409":
+          $ref: "#/components/responses/Error"
+  /users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteUser
+      description: >
+        Deletes an account. Its sessions, chats, dashboards, saved questions and schedules are removed;
+        records it authored elsewhere (deployments, policies, instructions, SQL pairs) are kept without
+        an author. Refused for your own account, for an account holding capabilities you lack, and for
+        the last account that can manage users. Audited as `user_deleted`. Needs `manage_users`.
+      responses:
+        "200":
+          description: Account deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, deleted]
+                properties:
+                  user_id:
+                    type: string
+                    format: uuid
+                  deleted:
+                    type: boolean
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
   /users/{user_id}/role:
     parameters:
