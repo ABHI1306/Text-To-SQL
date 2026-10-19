@@ -15,7 +15,9 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
+from sqlglot import exp, parse_one
 
+from app.agent.guard import safe_reply, screen_question
 from app.agent.presentation import summary_is_grounded, validate_chart_spec
 from app.agent.prompts import (
     CHART_SCHEMA,
@@ -93,22 +95,36 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         """Make a follow-up standalone using thread history; an LLM error is a typed failure."""
         history = state.get("history") or []
         question = state["question"]
+        refusal = screen_question(question)  # the raw text, before a rewrite can soften it
+        if refusal is not None:
+            return {"standalone_question": question, "intent": "respond", "reply": refusal}
         if not history:
             return {"standalone_question": question}
         try:
-            return {"standalone_question": rewrite_question(small, question, history)}
+            rewritten = rewrite_question(small, question, history)
+            if _lost_the_users_words(question, rewritten):
+                return {
+                    "standalone_question": rewritten,
+                    "intent": "clarify",
+                    "reply": f'I read this as: "{rewritten}". Is that what you meant?',
+                    "options": [rewritten],
+                }
+            return {"standalone_question": rewritten}
         except Exception:  # noqa: BLE001 - fail closed into a typed failure
             return {"failure": _llm_down()}
 
     def classify_intent(state: AgentState) -> dict[str, Any]:
         """Route the question to data question, clarify or respond with the small model."""
+        if state.get("intent") in {"respond", "clarify"} and state.get("reply"):
+            return {}  # already settled by the guard or the rewrite check; no model call
         try:
             intent, reply = route_intent(
                 small, state["standalone_question"], [model.name for model in deps.mdl.models]
             )
         except Exception:  # noqa: BLE001 - fail closed into a typed failure
             return {"failure": _llm_down()}
-        return {"intent": intent, "reply": reply}
+        options = _clarify_options(deps.mdl) if intent == "clarify" else []
+        return {"intent": intent, "reply": safe_reply(reply), "options": options}
 
     def clarify(state: AgentState) -> dict[str, Any]:
         """Terminal node: the clarifying question is already in ``reply``."""
@@ -181,12 +197,20 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
                     CompileError(CompileErrorCode.SYNTAX_ERROR, "the query could not be compiled")
                 ],
             }
+        errors = list(compiled.errors)
+        if not errors and _returns_only_constants(state.get("logical_sql") or ""):
+            errors.append(
+                CompileError(
+                    CompileErrorCode.SYNTAX_ERROR,
+                    "SELECT must return columns or aggregates from a model, not only constants",
+                )
+            )
         return {
             "sql": compiled.sql or None,
             "parameters": dict(compiled.parameters),
             "policy_context": compiled.policy_context or None,
             "missing_attributes": compiled.missing_attributes,
-            "validation_errors": list(compiled.errors),
+            "validation_errors": errors,
         }
 
     def validate_sql(state: AgentState) -> dict[str, Any]:
@@ -391,6 +415,50 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
     graph.add_edge("chart", END)
     graph.add_edge("structured_failure", END)
     return graph.compile()
+
+
+_FILLER_WORDS = frozenset(
+    "the a an and or of to in on for with by from is are was were do does did we you me my our"
+    " show give list tell what which who how many much only just please can could would about"
+    " each every all any some there here have has had get got into out than then more most"
+    " less ones one".split()
+)
+
+
+def _returns_only_constants(logical_sql: str) -> bool:
+    """True for a SELECT whose columns are all literals: it would present made-up text as data."""
+    try:
+        root = parse_one(logical_sql, read="postgres")
+    except Exception:  # noqa: BLE001 - unparsable SQL is the compiler's error to report
+        return False
+    return isinstance(root, exp.Select) and all(
+        isinstance(item.unalias(), (exp.Literal, exp.Null, exp.Boolean))
+        for item in root.expressions
+    )
+
+
+def _stem(word: str) -> str:
+    """A crude prefix stem so 'closed' and 'close' count as the same word."""
+    return word[:5]
+
+
+def _lost_the_users_words(original: str, rewritten: str) -> bool:
+    """True when a rewrite dropped most of what the user actually typed, so it should be
+    confirmed with them instead of run. Faithful rewrites add context and keep the user's words."""
+    words = [
+        w for w in re.findall(r"[a-z0-9]+", original.lower())
+        if len(w) > 3 and w not in _FILLER_WORDS and not _REFERENCE_WORDS.fullmatch(w)
+    ]
+    if not words or original.strip().lower() == rewritten.strip().lower():
+        return False
+    kept = {_stem(w) for w in re.findall(r"[a-z0-9]+", rewritten.lower())}
+    return sum(_stem(w) in kept for w in words) / len(words) < 0.5
+
+
+def _clarify_options(mdl: Mdl) -> list[str]:
+    """Up to three ready-made questions built from the model names, one click each."""
+    names = [model.name.replace("_", " ") for model in mdl.models][:3]
+    return [f"How many {name} do we have?" for name in names]
 
 
 _REFERENCE_WORDS = re.compile(

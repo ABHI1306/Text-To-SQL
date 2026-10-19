@@ -15,6 +15,13 @@ from tests.test_agent_graph import FakeRetrieval, FakeWarehouse, RoutingLlm, Scr
 CASES = json.loads((Path(__file__).parent / "data/redteam_cases.json").read_text())["cases"]
 
 
+@pytest.fixture(autouse=True)
+def _guard_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These cases prove the compiler stops hostile model output on its own; the question
+    guard (tests/test_guard.py) would otherwise refuse several of them first."""
+    monkeypatch.setattr("app.agent.graph.screen_question", lambda _question: None)
+
+
 def run(case: dict[str, Any]) -> tuple[dict[str, Any], FakeWarehouse, ScriptedLlm]:
     mdl = build_mdl()
     if case.get("mdl_description_injection"):

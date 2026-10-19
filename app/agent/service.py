@@ -487,7 +487,13 @@ def _contract_event(event: AskEvent, state: Mapping[str, Any]) -> AskEvent | Non
     if event.type == "chart":
         return AskEvent("chart", {"vega_lite_spec": event.data.get("spec")})
     if event.type == "clarification":
-        return AskEvent("clarification", {"question": event.data.get("message") or "", "options": []})
+        return AskEvent(
+            "clarification",
+            {
+                "question": event.data.get("message") or "",
+                "options": list(event.data.get("options") or []),
+            },
+        )
     return event
 
 
@@ -507,7 +513,10 @@ def _events(
             },
         )
     elif node == "clarify":
-        yield AskEvent("clarification", {"message": state.get("reply")})
+        yield AskEvent(
+            "clarification",
+            {"message": state.get("reply"), "options": list(state.get("options") or [])},
+        )
     elif node == "respond":
         yield AskEvent("answer", {"message": state.get("reply")})
     elif node == "retrieve_context" and "context" in change:

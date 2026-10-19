@@ -31,6 +31,7 @@ class AgentState(TypedDict, total=False):
     standalone_question: str
     intent: str
     reply: str | None
+    options: list[str]
     context: RetrievalResult
     context_text: str
     knowledge_text: str
