@@ -1,2 +1,24 @@
 line-length = 100
 target-version = "py311"
+
+[lint]
+# E/F/I: pycodestyle, pyflakes, isort. B: bugbear. S: flake8-bandit (security).
+select = ["E", "F", "I", "B", "S"]
+ignore = [
+  "E501",  # line length is left to `ruff format`, which is not enforced yet
+  "B008",  # FastAPI uses Depends(...) in argument defaults
+  "S101",  # asserts here narrow types after INSERT ... RETURNING; none guard security
+]
+
+[lint.per-file-ignores]
+# S608 flags f-strings in SQL. In these files they only interpolate module-level column lists
+# or fixed WHERE fragments; every value is passed as a %s parameter.
+"app/adapters/metadata/*.py" = ["S608"]
+# These build text for the semantic compiler (which validates names against the MDL); the text is
+# never sent to a database as written.
+"app/policy/validation.py" = ["S608"]
+"app/semantic/deploy_report.py" = ["S608"]
+"app/semantic/validator.py" = ["S608"]
+# Operator scripts call the configured local Ollama URL.
+"scripts/*.py" = ["S310"]
+"tests/**" = ["S105", "S106", "S311", "S324", "S608"]

@@ -128,6 +128,8 @@ installed, add the overlay: `make up GPU=1`. Other GPUs are not configured.
 | `make user-create USERNAME=x ROLE=User` | add a local account |
 | `make up IDENTITY=1` | also start OpenLDAP and Keycloak (see the runbook for the secrets they need) |
 | `make check` | ruff, mypy, import-linter and the Python tests |
+| `make audit` | known-vulnerability scan of the locked Python and UI dependencies |
+| `make secrets` | scan for committed secrets (needs the `gitleaks` binary) |
 | `make e2e` | Playwright tests against the UI mock API |
 | `make offline` | the whole stack with outbound traffic blocked |
 | `make eval PROJECT_ID=... USERNAME=...` | execution accuracy on the golden set, then the accuracy gate |

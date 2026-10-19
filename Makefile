@@ -1,4 +1,4 @@
-.PHONY: install check test lint format user-bootstrap-dba user-create user-reset-dba eval redteam rls drills e2e offline day9 init-env up down logs migrate models bootstrap reindex rotate-key
+.PHONY: install check test lint format audit secrets user-bootstrap-dba user-create user-reset-dba eval redteam rls drills e2e offline day9 init-env up down logs migrate models bootstrap reindex rotate-key
 ROLE ?= DBA
 
 install:
@@ -12,6 +12,15 @@ check:
 
 test:
 	uv run -- pytest -q
+
+# Known-vulnerability scan of the locked Python and UI dependencies (needs network).
+audit:
+	uv run -- pip-audit
+	cd ui && npm audit --audit-level=high
+
+# Scan the working tree and git history for committed secrets (needs the gitleaks binary).
+secrets:
+	gitleaks detect --source . --redact --no-banner
 
 lint:
 	uv run -- ruff check app migrations scripts tests

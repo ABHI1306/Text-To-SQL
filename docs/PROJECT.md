@@ -60,6 +60,31 @@ one collection with a project and model-version filter.
 `make init-env | up | down | models | bootstrap | reindex | rotate-key`. CLIs in `app/cli`
 (`users`, `ask`, `maintenance`).
 
+## Coding standards and security checks
+
+Standards are enforced by tools, not by a prose style guide. Configuration: `ruff.toml` (the only
+ruff config; ruff ignores `[tool.ruff]` in `pyproject.toml` when `ruff.toml` exists), `mypy.ini`,
+`[tool.importlinter]` in `pyproject.toml`.
+
+| Check | Where | What it catches |
+| --- | --- | --- |
+| ruff `E F I B` | `make check`, pre-commit, CI | style errors, unused code, import order, common bugs |
+| ruff `S` (flake8-bandit) | `make check`, pre-commit, CI | insecure patterns: SQL built from strings, weak hashes, unvetted URL opens |
+| mypy `strict` | `make check`, CI | missing or wrong types |
+| import-linter | `make check`, CI | ports and core importing adapters |
+| `make redteam`, `make rls` | CI is not wired to these; run before release | hostile SQL, row-level security leaks |
+| `make audit` (`pip-audit`, `npm audit --audit-level=high`) | CI | known vulnerabilities in locked dependencies |
+| gitleaks | pre-commit, CI (`secrets` job), `make secrets` | committed secrets, including history |
+| Dependabot (`.github/dependabot.yml`) | GitHub, weekly | outdated Python, npm and Actions dependencies |
+
+Suppressed on purpose (`ruff.toml` explains each): `S608` in the metadata adapters, where
+f-strings only join module-level column lists or fixed WHERE fragments and every value is a `%s`
+parameter; `S101`, because the asserts narrow types after `INSERT ... RETURNING`; `E501`, because
+line length is left to `ruff format`.
+
+Not covered: `ruff format` is not enforced (about 80 files would change), no container image
+scan, no coverage gate, and the security track has no second human reviewer (KNOWN_ISSUES).
+
 ## Definition of done, honestly
 
 | Item | Status |

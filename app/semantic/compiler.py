@@ -455,7 +455,7 @@ class _Compilation:
             )
             return
         provided = self._join_pairs(scope, join, left_models, right_model, cte_refs)
-        for alias, relationship in matches:
+        for _alias, relationship in matches:
             required = _condition_pairs(relationship.condition)
             if required <= provided:
                 return
