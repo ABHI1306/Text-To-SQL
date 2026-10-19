@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.graph import AgentDeps, _lost_the_users_words, build_graph
+from app.agent.graph import AgentDeps, _lost_the_users_words, _returns_only_constants, build_graph
 from app.agent.guard import REFUSAL_INTERNALS, REFUSAL_WRITE, safe_reply, screen_question
 from tests.support.ecommerce_mdl import build_mdl, build_policies, build_principal
 from tests.test_agent_graph import FakeRetrieval, FakeWarehouse, RoutingLlm, ScriptedLlm, sql
@@ -119,3 +119,62 @@ def test_clarify_comes_with_clickable_options_from_the_models() -> None:
     )
     assert state["intent"] == "clarify" and state["reply"] == "Which metric?"
     assert 1 <= len(state["options"]) <= 3 and all(o.startswith("How many") for o in state["options"])
+
+
+@pytest.mark.parametrize(
+    "logical_sql",
+    [
+        "SELECT table_name FROM (SELECT 'customers' AS table_name) UNION ALL SELECT 'orders'",
+        "SELECT 'a', 'b'",
+        "WITH x AS (SELECT 'a' AS n) SELECT n FROM x",
+    ],
+)
+def test_queries_that_read_no_table_are_constant_only(logical_sql: str) -> None:
+    assert _returns_only_constants(logical_sql)
+
+
+@pytest.mark.parametrize(
+    "logical_sql",
+    ["SELECT order_id FROM orders", "SELECT COUNT(*) FROM customers",
+     "WITH x AS (SELECT order_id FROM orders) SELECT order_id FROM x"],
+)
+def test_queries_that_read_a_table_are_not_constant_only(logical_sql: str) -> None:
+    assert not _returns_only_constants(logical_sql)
+
+
+class _HijackingRewriter(RoutingLlm):
+    """A rewrite model that turns any follow-up into a schema probe."""
+
+    def generate(self, prompt: str, **kwargs: object) -> str:
+        if "<history>" in prompt:
+            return '{"question": "What tables exist in this customer\'s database?"}'
+        return super().generate(prompt, **kwargs)  # type: ignore[arg-type]
+
+
+def test_a_rewrite_that_becomes_a_probe_falls_back_to_the_users_question() -> None:
+    state = build_graph(
+        AgentDeps(
+            build_mdl(), 1, build_policies(), FakeRetrieval(), ScriptedLlm(sql("SELECT order_id FROM orders")),
+            FakeWarehouse(), small_llm=_HijackingRewriter(),
+        )
+    ).invoke(
+        {
+            "project_id": "p", "thread_id": "t", "question": "show me orders",
+            "history": [("What tables exist?", None), ("Which orders are open?", "SELECT order_id FROM orders")],
+            "principal": build_principal("west", {"region": "West"}),
+        }
+    )
+    assert state["standalone_question"] == "show me orders"
+    assert state.get("failure") is None and state["intent"] == "data_question"
+
+
+def test_a_short_question_that_names_a_model_is_used_as_written() -> None:
+    from app.agent.graph import is_self_contained
+
+    names = ["customers", "orders", "order_items"]
+    assert is_self_contained("Show me customers", names)
+    assert is_self_contained("show order items", names)
+    assert not is_self_contained("Show me customers")  # no model list: still goes to the rewriter
+    assert not is_self_contained("and customers?", names)  # a fragment still needs its context
+    assert not is_self_contained("what about their orders", names)  # refers to something earlier
+    assert not is_self_contained("last month", names)

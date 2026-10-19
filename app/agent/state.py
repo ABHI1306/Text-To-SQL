@@ -45,6 +45,7 @@ class AgentState(TypedDict, total=False):
     missing_attributes: tuple[str, ...]
     validation_errors: list[CompileError]
     attempts: int
+    last_errors: tuple[tuple[str, str], ...]
     columns: list[str]
     rows: list[list[object]]
     truncated: bool

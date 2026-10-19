@@ -5,9 +5,15 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.types import Command
 
 from app.agent.graph import AgentDeps, build_graph
 from app.agent.prompts import PROMPT_VERSION
@@ -27,6 +33,8 @@ from app.ports.warehouse import WarehousePort
 from app.semantic.compiler import CompileError
 from app.semantic.retrieval import RetrievalCache, RetrievalService
 from app.semantic.runner import compile_for, execute_compiled, failure_from
+
+PAUSED_RUNS_KEPT = 500  # unanswered clarifications held in memory; the oldest drop first
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,12 @@ class AskResult:
     events: list[AskEvent] = field(default_factory=list)
 
 
+def checkpoint_serializer() -> JsonPlusSerializer:
+    """Checkpoint serializer that names the one app type a paused run stores, so resuming keeps
+    working when LangGraph starts blocking unregistered types."""
+    return JsonPlusSerializer(allowed_msgpack_modules=[("app.core.types", "Principal")])
+
+
 class AskService:
     """The only entry point from a question to rows: every path goes through the graph."""
 
@@ -87,6 +101,9 @@ class AskService:
         self._max_rows = max_rows
         self._small_llm = small_llm
         self._threads = threads
+        # Human in the loop: an unclear question pauses its run here until the user answers.
+        self._checkpointer = InMemorySaver(serde=checkpoint_serializer())
+        self._paused: OrderedDict[str, str] = OrderedDict()  # conversation thread -> run key
 
     def stream(
         self,
@@ -118,7 +135,8 @@ class AskService:
             AgentDeps(
                 mdl, version, policies, self._retrieval, self._llm, self._warehouse, row_limit,
                 small_llm=self._small_llm, summary_llm=self._summary_llm,
-            )
+            ),
+            self._checkpointer,
         )
         thread_id = thread_id or str(uuid.uuid4())
         turns = (
@@ -133,24 +151,45 @@ class AskService:
         state: dict[str, Any] = {"history": history}
         seen: list[AskEvent] = []
         usage = Usage()
-        updates = iter(
-            graph.stream(
-                {
-                    "project_id": project_id,
-                    "thread_id": thread_id,
-                    "question": question.strip(),
-                    "history": history,
-                    "principal": principal,
-                },
-                stream_mode="updates",
-            )
-        )
+        paused_key = self._paused.pop(thread_id, None) if remember else None
+        run_key = paused_key or f"{thread_id}:{uuid.uuid4()}"
+        config: RunnableConfig = {"configurable": {"thread_id": run_key}}
+        resuming = paused_key is not None and bool(graph.get_state(config).next)
+        if resuming:
+            graph_input: Any = Command(resume=question.strip())  # the answer to the clarification
+        else:
+            graph_input = {
+                "project_id": project_id,
+                "thread_id": thread_id,
+                "question": question.strip(),
+                "history": history,
+                "principal": principal,
+            }
+        updates = iter(graph.stream(graph_input, config, stream_mode="updates"))
         while True:
             with bind_usage(usage):
                 update = next(updates, None)
             if update is None:
                 break
             for node, change in update.items():
+                if node == "__interrupt__":  # the run paused: ask the user, remember where
+                    asked = change[0].value if change else {}
+                    state["reply"] = str(asked.get("question") or state.get("reply") or "")
+                    state["options"] = list(asked.get("options") or [])
+                    state["intent"] = "clarify"
+                    if remember:
+                        self._paused[thread_id] = run_key
+                        while len(self._paused) > PAUSED_RUNS_KEPT:
+                            self._paused.popitem(last=False)
+                    ask = AskEvent(
+                        "clarification", {"message": state["reply"], "options": state["options"]}
+                    )
+                    mapped = _contract_event(ask, state) if contract else ask
+                    if mapped is not None:
+                        timed = AskEvent(mapped.type, {**mapped.data, "ms": 0})
+                        seen.append(timed)
+                        yield timed
+                    continue
                 state.update(change or {})
                 now = time.monotonic()
                 for event in _events(node, change or {}, state, include_compiled):
@@ -512,7 +551,7 @@ def _events(
                 "used_context": bool(state.get("history")),
             },
         )
-    elif node == "clarify":
+    elif node == "clarify" and state.get("intent") == "clarify" and state.get("reply"):
         yield AskEvent(
             "clarification",
             {"message": state.get("reply"), "options": list(state.get("options") or [])},

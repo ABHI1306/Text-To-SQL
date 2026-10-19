@@ -936,10 +936,12 @@ td:first-child {
 
 .model-workspace {
   display: flex;
+  flex: 1;
   min-height: 0;
   flex-direction: column;
   gap: 14px;
   padding: 24px;
+  overflow-y: auto;
 }
 
 .model-toolbar {
@@ -986,8 +988,10 @@ td:first-child {
 }
 
 .model-flow {
+  position: relative;
   height: min(64vh, 700px);
   min-height: 420px;
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid #e3e5eb;
   border-radius: 9px;
@@ -1800,6 +1804,8 @@ td:first-child {
 
 .canvas-editor {
   display: grid;
+  flex: 0 0 auto;
+  min-height: 0;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
 }
@@ -1817,8 +1823,9 @@ td:first-child {
 
 .side-panel {
   max-height: min(64vh, 700px);
-  min-height: 420px;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .side-panel h2,
@@ -2045,13 +2052,13 @@ td:first-child {
 @media (max-width: 900px) {
   .canvas-editor,
   .metrics-editor {
-      grid-template-columns: minmax(0, 1fr);
-    }
+    grid-template-columns: minmax(0, 1fr);
+  }
 
   .side-panel {
-      max-height: none;
-      min-height: 0;
-    }
+    max-height: min(64vh, 700px);
+    min-height: 0;
+  }
 }
 
 [data-theme="dark"] .tab-bar,

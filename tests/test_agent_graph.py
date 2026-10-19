@@ -36,9 +36,11 @@ class ScriptedLlm:
     def __init__(self, *replies: str | Exception) -> None:
         self.replies = list(replies)
         self.prompts: list[str] = []
+        self.temperatures: list[float] = []
 
     def generate(self, prompt: str, *, temperature: float = 0.0, schema: Any = None) -> str:
         self.prompts.append(prompt)
+        self.temperatures.append(temperature)
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         if isinstance(reply, Exception):
             raise reply
@@ -120,7 +122,8 @@ def test_topology_is_a_deliberate_diff() -> None:
             ("rewrite_followup", "classify_intent"), ("rewrite_followup", "structured_failure"),
             ("classify_intent", "retrieve_context"), ("classify_intent", "clarify"),
             ("classify_intent", "respond"), ("classify_intent", "structured_failure"),
-            ("clarify", "__end__"), ("respond", "__end__"),
+            ("clarify", "classify_intent"), ("clarify", "respond"),
+            ("clarify", "structured_failure"), ("clarify", "__end__"), ("respond", "__end__"),
             ("retrieve_context", "generate_sql"), ("retrieve_context", "structured_failure"),
             ("generate_sql", "compile_sql"), ("generate_sql", "structured_failure"),
             ("compile_sql", "validate_sql"), ("compile_sql", "correct_sql"), ("compile_sql", "structured_failure"),
@@ -165,12 +168,34 @@ def test_a_typed_error_is_corrected_through_the_compiler() -> None:
 
 
 def test_correction_is_capped_and_nothing_executes_on_failure() -> None:
-    llm = ScriptedLlm(sql("SELECT order_dt FROM orders"))
+    # Each retry is wrong in a new way, so every correction attempt is used and then it stops.
+    llm = ScriptedLlm(*(sql(f"SELECT bad_{n} FROM orders") for n in range(1 + MAX_CORRECTIONS)))
     state, warehouse = run(llm)
     assert state["failure"].code == "UNKNOWN_COLUMN"
     assert state["attempts"] == MAX_CORRECTIONS == 3
     assert len(llm.prompts) == 1 + MAX_CORRECTIONS
     assert warehouse.executed == [] and warehouse.explained == []
+
+
+def test_a_retry_that_repeats_the_same_mistake_stops_early() -> None:
+    llm = ScriptedLlm(sql("SELECT order_dt FROM orders"))
+    state, warehouse = run(llm)
+    assert state["failure"].code == "UNKNOWN_COLUMN"
+    assert state["attempts"] == 1 and len(llm.prompts) == 2  # one try, one correction, then stop
+    assert warehouse.executed == []
+
+
+def test_retries_are_allowed_to_differ_from_the_first_try() -> None:
+    llm = ScriptedLlm(*(sql(f"SELECT bad_{n} FROM orders") for n in range(1 + MAX_CORRECTIONS)))
+    run(llm)
+    assert llm.temperatures[0] == 0.0
+    assert all(t > 0.0 for t in llm.temperatures[1:]) and llm.temperatures[1] < llm.temperatures[2]
+
+
+def test_a_failure_tells_the_user_to_rephrase_in_plain_words() -> None:
+    state, _ = run(ScriptedLlm(sql("SELECT order_dt FROM orders")))
+    assert "Try asking it in a different way" in state["failure"].message
+    assert "order_dt" in state["failure"].message  # the detail is kept for the audit trail
 
 
 @pytest.mark.parametrize(

@@ -12,8 +12,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import interrupt
 from pydantic import ValidationError
 from sqlglot import exp, parse_one
 
@@ -52,6 +54,9 @@ from app.semantic.retrieval import RetrievalResult, RetrievalService
 from app.semantic.validator import validate_compiled_sql
 
 MAX_CORRECTIONS = 3
+# Retries may differ from the first try (which stays at 0.0): the same prompt at 0.0 tends to
+# give the same wrong answer again. One entry per correction attempt, the last one repeats.
+CORRECTION_TEMPERATURES = (0.3, 0.5, 0.7)
 
 NODES = (
     "rewrite_followup",
@@ -85,11 +90,18 @@ class AgentDeps:
     summary_llm: LLMPort | None = None  # summary and chart model; both are skipped when None
 
 
-def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
-    """Wire the nodes into the question graph; every query path runs compile, validate, execute."""
+def build_graph(
+    deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any] | None = None
+) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """Wire the nodes into the question graph; every query path runs compile, validate, execute.
+
+    With a ``checkpointer`` an unclear question pauses the run (human in the loop): the user's
+    next message resumes it. Without one, an unclear question ends the turn with its question.
+    """
     graph: StateGraph[Any, Any, Any, Any] = StateGraph(AgentState)
 
     small = deps.small_llm or deps.llm
+    model_names = [model.name for model in deps.mdl.models]
 
     def rewrite_followup(state: AgentState) -> dict[str, Any]:
         """Make a follow-up standalone using thread history; an LLM error is a typed failure."""
@@ -101,7 +113,9 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         if not history:
             return {"standalone_question": question}
         try:
-            rewritten = rewrite_question(small, question, history)
+            rewritten = rewrite_question(small, question, history, model_names)
+            if screen_question(rewritten) is not None:
+                rewritten = question  # the rewrite turned an ordinary question into a probe
             if _lost_the_users_words(question, rewritten):
                 return {
                     "standalone_question": rewritten,
@@ -127,8 +141,26 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         return {"intent": intent, "reply": safe_reply(reply), "options": options}
 
     def clarify(state: AgentState) -> dict[str, Any]:
-        """Terminal node: the clarifying question is already in ``reply``."""
-        return {}
+        """Ask the user and pause; their answer resumes here and the question is classified again.
+
+        Without a checkpointer this is terminal: the clarifying question is already in ``reply``.
+        """
+        if checkpointer is None:
+            return {}
+        answer = str(
+            interrupt({"question": state.get("reply") or "", "options": state.get("options") or []})
+        ).strip()
+        refusal = screen_question(answer)
+        if refusal is not None:
+            return {"intent": "respond", "reply": refusal, "options": []}
+        original = state.get("standalone_question") or state["question"]
+        try:
+            merged = rewrite_question(small, answer, [(original, None)], model_names)
+        except Exception:  # noqa: BLE001 - fail closed into a typed failure
+            return {"failure": _llm_down()}
+        if screen_question(merged) is not None:
+            merged = answer  # the merge turned the answer into a probe
+        return {"standalone_question": merged, "intent": "", "reply": None, "options": []}
 
     def respond(state: AgentState) -> dict[str, Any]:
         """Terminal node: the chat reply is already in ``reply``."""
@@ -260,7 +292,13 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
             state["allowed_names"],
             state.get("knowledge_text", ""),
         )
-        return {**_candidate(deps.llm, prompt), "attempts": state.get("attempts", 0) + 1}
+        attempt = state.get("attempts", 0)
+        temperature = CORRECTION_TEMPERATURES[min(attempt, len(CORRECTION_TEMPERATURES) - 1)]
+        return {
+            **_candidate(deps.llm, prompt, temperature),
+            "attempts": attempt + 1,
+            "last_errors": _error_signature(state["validation_errors"]),
+        }
 
     def execute_sql(state: AgentState) -> dict[str, Any]:
         """Run the validated query read-only with the row limit; errors become typed failures."""
@@ -325,17 +363,21 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
             return {}
         errors = tuple(state.get("validation_errors") or ())
         first = errors[0] if errors else None
+        detail = first.message if first else "The query could not be validated."
         return {
             "failure": StructuredFailure(
                 first.code.value if first else "VALIDATION_FAILED",
-                first.message if first else "The query could not be validated.",
+                f"I couldn't build a reliable query for this question ({detail}). "
+                "Try asking it in a different way.",
                 retryable=False,
                 errors=errors,
             )
         }
 
     def retry_or_fail(state: AgentState) -> Literal["correct_sql", "structured_failure"]:
-        """Correct again while attempts remain, else fail."""
+        """Correct again while attempts remain and the last correction changed something."""
+        if _error_signature(state.get("validation_errors") or []) == state.get("last_errors"):
+            return "structured_failure"  # the retry made the same mistake: more retries waste time
         if state.get("attempts", 0) < deps.max_corrections:
             return "correct_sql"
         return "structured_failure"
@@ -356,6 +398,18 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
         if intent == "respond":
             return "respond"
         return "retrieve_context"
+
+    def after_clarify(
+        state: AgentState,
+    ) -> Literal["classify_intent", "respond", "structured_failure", "__end__"]:
+        """After the user answers: classify the merged question again; a refusal is shown."""
+        if state.get("failure"):
+            return "structured_failure"
+        if state.get("intent") == "respond":
+            return "respond"
+        if state.get("intent") == "clarify":
+            return "__end__"  # no checkpointer: the clarifying question ends the turn
+        return "classify_intent"
 
     def after_retrieve(state: AgentState) -> Literal["generate_sql", "structured_failure"]:
         """Route after retrieval: stop on failure, else generate."""
@@ -403,7 +457,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
     graph.add_edge(START, "rewrite_followup")
     graph.add_conditional_edges("rewrite_followup", after_rewrite)
     graph.add_conditional_edges("classify_intent", after_classify)
-    graph.add_edge("clarify", END)
+    graph.add_conditional_edges("clarify", after_clarify)
     graph.add_edge("respond", END)
     graph.add_conditional_edges("retrieve_context", after_retrieve)
     graph.add_conditional_edges("generate_sql", after_generate)
@@ -414,7 +468,7 @@ def build_graph(deps: AgentDeps) -> CompiledStateGraph[Any, Any, Any, Any]:
     graph.add_edge("summarize", "chart")
     graph.add_edge("chart", END)
     graph.add_edge("structured_failure", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 _FILLER_WORDS = frozenset(
@@ -426,14 +480,30 @@ _FILLER_WORDS = frozenset(
 
 
 def _returns_only_constants(logical_sql: str) -> bool:
-    """True for a SELECT whose columns are all literals: it would present made-up text as data."""
+    """True when the query reads no real table, so any rows it returns are text the model made
+    up (a UNION of literals, a subquery of literals, a constant SELECT) shown as data."""
     try:
         root = parse_one(logical_sql, read="postgres")
     except Exception:  # noqa: BLE001 - unparsable SQL is the compiler's error to report
         return False
-    return isinstance(root, exp.Select) and all(
+    ctes = {cte.alias_or_name.lower() for cte in root.find_all(exp.CTE)}
+    if not any(table.name.lower() not in ctes or table.db for table in root.find_all(exp.Table)):
+        return True
+    return all(_is_literal_select(branch) for branch in _branches(root))
+
+
+def _branches(root: exp.Expr) -> list[exp.Expr]:
+    """The SELECTs a query returns rows from: itself, or both sides of each UNION."""
+    if isinstance(root, exp.SetOperation):
+        return _branches(root.this) + _branches(root.expression)
+    return [root]
+
+
+def _is_literal_select(node: exp.Expr) -> bool:
+    """A SELECT whose every returned column is a literal."""
+    return isinstance(node, exp.Select) and all(
         isinstance(item.unalias(), (exp.Literal, exp.Null, exp.Boolean))
-        for item in root.expressions
+        for item in node.expressions
     )
 
 
@@ -475,18 +545,28 @@ _FRAGMENT_START = re.compile(
 _MIN_STANDALONE_WORDS = 4
 
 
-def is_self_contained(message: str) -> bool:
+def is_self_contained(message: str, model_names: Sequence[str] = ()) -> bool:
     """True when the message names its own subject and refers to nothing earlier.
+
+    Naming one of the project's models ("show me customers") is enough of a subject even in
+    fewer than four words.
 
     Such a message is a new question: it is used as written, so a period or filter from the
     previous turn can never leak into it and no model call is spent on it.
     """
     text = message.strip()
+    names_a_model = _names_a_model(text, model_names)
     return (
-        len(text.split()) >= _MIN_STANDALONE_WORDS
+        (len(text.split()) >= _MIN_STANDALONE_WORDS or names_a_model)
         and _FRAGMENT_START.search(text) is None
         and _REFERENCE_WORDS.search(text) is None
     )
+
+
+def _names_a_model(text: str, model_names: Sequence[str]) -> bool:
+    """True when a word of the message matches a word of a model name ('customer' ~ customers)."""
+    wanted = {_stem(part) for name in model_names for part in name.lower().split("_") if part}
+    return any(_stem(word) in wanted for word in re.findall(r"[a-z0-9]+", text.lower()) if len(word) > 3)
 
 
 def recent_context(history: Sequence[tuple[str, str | None]]) -> Sequence[tuple[str, str | None]]:
@@ -503,13 +583,16 @@ def recent_context(history: Sequence[tuple[str, str | None]]) -> Sequence[tuple[
 
 
 def rewrite_question(
-    llm: LLMPort, question: str, history: Sequence[tuple[str, str | None]]
+    llm: LLMPort,
+    question: str,
+    history: Sequence[tuple[str, str | None]],
+    model_names: Sequence[str] = (),
 ) -> str:
     """The message as a standalone question; the raw message when the rewrite is unusable.
 
     Raises when the model itself is unavailable (the graph turns that into a typed failure).
     """
-    if is_self_contained(question):
+    if is_self_contained(question, model_names):
         return question
     raw = llm.generate(
         build_rewrite_prompt(question, recent_context(history)),
@@ -549,10 +632,15 @@ def _llm_down() -> StructuredFailure:
     )
 
 
-def _candidate(llm: LLMPort, prompt: str) -> dict[str, Any]:
+def _error_signature(errors: Sequence[CompileError]) -> tuple[tuple[str, str], ...]:
+    """What went wrong, ignoring order: two equal signatures mean the retry changed nothing."""
+    return tuple(sorted((error.code.value, error.identifier or error.message) for error in errors))
+
+
+def _candidate(llm: LLMPort, prompt: str, temperature: float = 0.0) -> dict[str, Any]:
     """One structured call, with one repair retry on unparseable output before it counts."""
     try:
-        raw = llm.generate(prompt, temperature=0.0, schema=SQL_CANDIDATE_SCHEMA)
+        raw = llm.generate(prompt, temperature=temperature, schema=SQL_CANDIDATE_SCHEMA)
         parsed = _parse(raw)
         if parsed is None:
             raw = llm.generate(
