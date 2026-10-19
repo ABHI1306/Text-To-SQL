@@ -9,7 +9,7 @@ question while one is running, or pre-ask the ones marked (warm).
 | Min | Show | Say |
 | --- | --- | --- |
 | 0:00 | **Home**, empty chat | "A local Text-to-SQL service. The model runs on this machine; nothing leaves it." |
-| 0:45 | **Setup** > PostgreSQL: host `demo-db`, test connection, pick tables, define relationships, save, then **Deploy** | "The DBA describes the data once, in a semantic model. The model never sees raw tables, only this." |
+| 0:45 | **Setup** > PostgreSQL: host `demo-db`, test connection, pick tables, define relationships, save; preview live rows from **Review**, then **Deploy** | "The DBA can inspect the connected data directly; the assistant uses the reviewed semantic model." |
 | 3:00 | **Connect and model**: drag a relationship, add a calculated field, open a metric preview | "The compiler turns questions over this model into SQL, so rules live in one place." |
 | 4:00 | **Home**: "How many orders are there per region?" (warm) | Point at the steps timeline, the SQL tabs, the chart and the short answer. "Every step is visible." |
 | 5:00 | Click one of the follow-up chips under the answer | "Follow-ups keep the conversation's context." |

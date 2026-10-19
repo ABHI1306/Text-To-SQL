@@ -150,6 +150,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes the project and everything it owns (dashboards, saved questions, threads, schedules, row policies, model versions, knowledge) and clears its search vectors. The connected database itself is not touched. Audited as `project_deleted`. Needs `manage_connection` and access to the project. */
+        delete: operations["deleteProject"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/setup": {
         parameters: {
             query?: never;
@@ -177,7 +196,27 @@ export interface paths {
             };
             cookie?: never;
         };
+        /** @description Lists tables visible to a connection manager. `row_count` is calculated exactly for each table on the requested page, so large tables may take longer than catalog estimates. */
         get: operations["listCatalogTables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/catalog/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description Returns column names, PostgreSQL data types and up to 100 live rows from one visible table. This is a read-only preview for connection managers; default limit is 50. */
+        get: operations["previewCatalogTable"];
         put?: never;
         post?: never;
         delete?: never;
@@ -358,6 +397,25 @@ export interface paths {
         put?: never;
         post: operations["createUser"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes an account. Its sessions, chats, dashboards, saved questions and schedules are removed; records it authored elsewhere (deployments, policies, instructions, SQL pairs) are kept without an author. Refused for your own account, for an account holding capabilities you lack, and for the last account that can manage users. Audited as `user_deleted`. Needs `manage_users`. */
+        delete: operations["deleteUser"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1047,8 +1105,20 @@ export interface components {
         CatalogTable: {
             schema: string;
             table: string;
-            approx_rows: number;
+            /** @description Exact live row count for this table. */
+            row_count: number;
             column_count: number;
+        };
+        CatalogPreview: {
+            schema: string;
+            table: string;
+            columns: string[];
+            column_types: string[];
+            rows: unknown[][];
+            /** @description Exact total number of rows in the table. */
+            row_count: number;
+            limit: number;
+            truncated: boolean;
         };
         SelectedTable: {
             schema: string;
@@ -1425,6 +1495,34 @@ export interface operations {
             422: components["responses"]["Error"];
         };
     };
+    deleteProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                        deleted: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     getSetupState: {
         parameters: {
             query?: never;
@@ -1483,6 +1581,37 @@ export interface operations {
                     };
                 };
             };
+            403: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    previewCatalogTable: {
+        parameters: {
+            query: {
+                schema: string;
+                table: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live table columns, exact row count and a bounded sample. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogPreview"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            502: components["responses"]["Error"];
         };
     };
     saveSelectedTables: {
@@ -1864,6 +1993,36 @@ export interface operations {
                 content?: never;
             };
             409: components["responses"]["Error"];
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Account deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        user_id: string;
+                        deleted: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     assignUserRole: {

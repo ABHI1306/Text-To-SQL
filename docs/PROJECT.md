@@ -39,7 +39,7 @@ custom roles are built from the capability list.
 | Area | What exists |
 | --- | --- |
 | Sign-in | local passwords (Argon2, lockout, rotating refresh cookie), LDAP (StartTLS), OIDC (code + PKCE), group-to-role mapping, session revocation |
-| Modelling | introspection, table selection, profiling with redaction, canvas editor, calculated fields, metrics, deploy report, versioned deploy with atomic index switch, drift detection |
+| Modelling | introspection, table selection, read-only live table preview (up to 50 rows), exact row counts for the visible catalog page, profiling with redaction, canvas editor, calculated fields, metrics, deploy report, versioned deploy with atomic index switch, drift detection |
 | Asking | streaming steps, logical and compiled SQL, charts, summary, follow-ups, saved threads, edit and re-run SQL |
 | Knowledge | instructions, approved SQL pairs, proposals from feedback |
 | Governance | row policies (attribute-based), audit log with export, allowed-hosts setting |

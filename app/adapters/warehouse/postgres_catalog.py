@@ -126,6 +126,48 @@ class PostgresCatalogAdapter:
             for row in rows
         )
 
+    def preview_table(self, schema_name: str, table_name: str, *, limit: int = 50) -> tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[object, ...], ...], int]:
+        """Read a bounded page of real table values for the DBA's catalog preview."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._connect() as connection, connection.cursor() as cursor:
+            self._set_read_only(cursor)
+            cursor.execute(
+                "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (schema_name, table_name),
+            )
+            metadata = cursor.fetchall()
+            columns = tuple(str(row[0]) for row in metadata)
+            column_types = tuple(str(row[1]) for row in metadata)
+            if not columns:
+                raise ValueError("Table is not visible")
+            quoted_table = sql.Identifier(schema_name, table_name)
+            cursor.execute(sql.SQL("SELECT count(*) FROM {}").format(quoted_table))
+            row_count = int(cast(int, cursor.fetchone()[0]))
+            cursor.execute(
+                sql.SQL("SELECT * FROM {} LIMIT %s").format(quoted_table),
+                (limit,),
+            )
+            return columns, column_types, tuple(cursor.fetchall()), row_count
+
+    def count_tables(self, tables: tuple[tuple[str, str], ...]) -> tuple[int, ...]:
+        """Return exact row counts for a bounded set of visible tables in a read-only session."""
+        counts: list[int] = []
+        with self._connect() as connection, connection.cursor() as cursor:
+            self._set_read_only(cursor)
+            for schema_name, table_name in tables:
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s AND table_type = 'BASE TABLE'",
+                    (schema_name, table_name),
+                )
+                if cursor.fetchone() is None:
+                    raise ValueError(f"Table {schema_name}.{table_name} is not visible")
+                cursor.execute(
+                    sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(schema_name, table_name))
+                )
+                counts.append(int(cast(int, cursor.fetchone()[0])))
+        return tuple(counts)
+
     def profile_tables(
         self,
         tables: tuple[tuple[str, str], ...],

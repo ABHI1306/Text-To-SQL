@@ -11,6 +11,8 @@ no data or prompts leave it. Only PostgreSQL is supported as a data source.
 - [docs/PROJECT.md](docs/PROJECT.md): what is built, as built
 - [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) and [docs/EVALUATION.md](docs/EVALUATION.md): what does not work yet, and the accuracy numbers
 - [docs/DECISIONS.md](docs/DECISIONS.md): why things are the way they are; [docs/openapi.yaml](docs/openapi.yaml): the API
+  contract used to generate the UI types. The live Swagger UI is at <http://localhost:8000/docs>
+  and its OpenAPI JSON is at <http://localhost:8000/openapi.json>.
 
 ## How it fits together
 
@@ -88,6 +90,9 @@ printed (it is also `BOOTSTRAP_DBA_PASSWORD` in `.env` until `make bootstrap` cl
    database `demo`, user `warehouse_reader` and `WAREHOUSE_READER_PASSWORD` from `.env`.
 2. **Test connection**, create the project, **select tables**, define relationships, then
    **Validate and save model**.
+   On the Review step, **Browse live database rows** shows exact counts for the current table
+   page. **Preview rows** opens up to 50 read-only rows with column names and PostgreSQL types;
+   the dialog also shows the exact total. This requires `manage_connection`.
 3. **Connect and model** > **Deploy report** > **Deploy model**.
 4. **Home**: ask "How many customers do we have?".
 

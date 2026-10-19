@@ -32,6 +32,7 @@ from app.api.security import (
     test_connection,
 )
 from app.audit.service import AuditService
+from app.core.jsonable import json_value
 from app.auth.models import AuthContext, LoginResult
 from app.auth.service import (
     AuthenticationError,
@@ -117,6 +118,37 @@ class TableSelection(BaseModel):
 class SelectedTablesRequest(BaseModel):
     """Body listing the tables a project's model is built from."""
     tables: list[TableSelection] = Field(min_length=1, max_length=500)
+
+
+class CatalogTableResponse(BaseModel):
+    """A visible warehouse table and its exact live row count."""
+
+    schema_name: str = Field(alias="schema")
+    table_name: str = Field(alias="table")
+    row_count: int
+    column_count: int
+
+
+class CatalogTablesResponse(BaseModel):
+    """One page of visible warehouse tables."""
+
+    items: list[CatalogTableResponse]
+    page: int
+    page_size: int
+    total: int
+
+
+class CatalogPreviewResponse(BaseModel):
+    """Column metadata and a bounded sample of live warehouse data."""
+
+    schema_name: str = Field(alias="schema")
+    table_name: str = Field(alias="table")
+    columns: list[str]
+    column_types: list[str]
+    rows: list[list[object]]
+    row_count: int
+    limit: int
+    truncated: bool
 
 
 class AskQuestionRequest(BaseModel):
@@ -588,7 +620,7 @@ def get_setup_state(
     }
 
 
-@router.get("/projects/{project_id}/catalog/tables", tags=["Projects"])
+@router.get("/projects/{project_id}/catalog/tables", tags=["Projects"], response_model=CatalogTablesResponse)
 def list_catalog_tables(
     project_id: UUID,
     context: ManageConnectionContext,
@@ -611,20 +643,52 @@ def list_catalog_tables(
         if search.casefold() in f"{table.schema_name}.{table.table_name}".casefold()
     ]
     offset = (page - 1) * page_size
+    page_tables = filtered[offset : offset + page_size]
+    try:
+        exact_counts = catalog.count_tables(
+            tuple((item.schema_name, item.table_name) for item in page_tables)
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except psycopg.Error as error:
+        raise HTTPException(status_code=502, detail="Could not count catalog table rows") from error
     return {
         "items": [
             {
                 "schema": table.schema_name,
                 "table": table.table_name,
-                "approx_rows": table.approx_rows,
+                "row_count": exact_count,
                 "column_count": table.column_count,
             }
-            for table in filtered[offset : offset + page_size]
+            for table, exact_count in zip(page_tables, exact_counts, strict=True)
         ],
         "page": page,
         "page_size": page_size,
         "total": len(filtered),
     }
+
+
+@router.get("/projects/{project_id}/catalog/preview", tags=["Projects"], response_model=CatalogPreviewResponse)
+def preview_catalog_table(
+    project_id: UUID,
+    context: ManageConnectionContext,
+    repository: RepositoryDependency,
+    schema: Annotated[str, Query(min_length=1, max_length=128)],
+    table: Annotated[str, Query(min_length=1, max_length=128)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> dict[str, object]:
+    """Show a bounded read-only sample of real warehouse values to connection managers."""
+    _require_project_access(context, project_id)
+    _, catalog = _project_connection(repository, project_id)
+    try:
+        columns, column_types, rows, row_count = catalog.preview_table(schema, table, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except psycopg.Error as error:
+        raise HTTPException(status_code=502, detail="Could not preview this table") from error
+    return {"schema": schema, "table": table, "columns": columns, "column_types": column_types, "row_count": row_count,
+            "rows": [[json_value(value) for value in row] for row in rows],
+            "limit": limit, "truncated": row_count > len(rows)}
 
 
 @router.put("/projects/{project_id}/selected-tables", tags=["Projects"])

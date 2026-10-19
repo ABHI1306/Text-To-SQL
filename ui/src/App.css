@@ -1303,6 +1303,28 @@ td:first-child {
   border-radius: 6px;
 }
 
+.table-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(8 12 22 / 72%);
+}
+
+.table-preview-dialog {
+  width: min(1100px, 100%);
+  max-height: min(82vh, 800px);
+  overflow: auto;
+  background: var(--surface, #fff);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 35%);
+}
+
+.table-preview-dialog .catalog-list {
+  max-height: min(55vh, 520px);
+}
+
 .table-search {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2406,6 +2428,31 @@ td:first-child {
 .catalog-table .num,
 .model-node-table .num {
   text-align: right;
+}
+
+.browse-table {
+  table-layout: fixed;
+}
+
+.browse-table th:first-child,
+.browse-table td:first-child {
+  width: auto;
+}
+
+.browse-table-name {
+  width: 52%;
+}
+
+.browse-table-count {
+  width: 28%;
+}
+
+.browse-table-action {
+  width: 20%;
+}
+
+.browse-table .browse-action-cell {
+  text-align: center;
 }
 
 .catalog-table .mono,

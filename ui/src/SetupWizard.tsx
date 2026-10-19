@@ -14,6 +14,7 @@ type LoadedCatalog = {
   total: number
   mdl?: Mdl
 }
+type TablePreview = { schema: string; table: string; columns: string[]; column_types: string[]; rows: unknown[][]; row_count: number; truncated: boolean }
 type ConnectionDraft = Pick<
   components['schemas']['ConnectionRequest'],
   'displayName' | 'host' | 'port' | 'username' | 'database' | 'ssl'
@@ -60,6 +61,12 @@ const STEP_TITLES = {
   },
 } as const
 
+const NUMERIC_COLUMN_TYPES = new Set(['smallint', 'integer', 'bigint', 'numeric', 'decimal', 'real', 'double precision'])
+
+function numericColumn(preview: TablePreview, index: number): boolean {
+  return NUMERIC_COLUMN_TYPES.has(preview.column_types[index] ?? '')
+}
+
 export function SetupWizard({
   apiRequest,
   existingProject,
@@ -89,6 +96,8 @@ export function SetupWizard({
   const [caCertificate, setCaCertificate] = useState('')
   const [draftJson, setDraftJson] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
+  const [preview, setPreview] = useState<TablePreview | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const form = { ...defaultDraft, ...draft }
@@ -153,6 +162,21 @@ export function SetupWizard({
       .catch((reason: unknown) => {
         setError(reason instanceof Error ? reason.message : 'Could not load this page')
       })
+  }
+
+  async function previewTable(schema: string, table: string) {
+    setPreviewBusy(true)
+    setError(null)
+    try {
+      const query = new URLSearchParams({ schema, table, limit: '50' })
+      const response = await apiRequest(`/api/v1/projects/${projectId}/catalog/preview?${query}`)
+      if (!response.ok) throw await responseError(response)
+      setPreview(await response.json() as TablePreview)
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Could not preview this table')
+    } finally {
+      setPreviewBusy(false)
+    }
   }
 
   useEffect(() => {
@@ -342,6 +366,13 @@ export function SetupWizard({
       <p className="setup-lede">{STEP_TITLES[step].lede}</p>
       {error && <p className="setup-error" role="alert">{error}</p>}
       {notice && <p className="setup-notice" role="status">{notice}</p>}
+      {(step === 'complete' || step === 'relationships') && <section className="setup-card">
+        <h3>Browse live database rows</h3>
+        <p className="side-panel-hint">Read-only preview of up to 50 real rows from a connected table.</p>
+        <div className="catalog-list"><table className="catalog-table browse-table"><colgroup><col className="browse-table-name" /><col className="browse-table-count" /><col className="browse-table-action" /></colgroup><thead><tr><th scope="col">Table</th><th className="num" scope="col">Rows</th><th className="browse-action-cell" scope="col">Preview</th></tr></thead>
+          <tbody>{tables.map((item) => <tr key={`${item.schema}.${item.table}`}><td className="mono">{item.schema}.{item.table}</td><td className="num mono">{item.row_count.toLocaleString()}</td><td className="browse-action-cell"><button className="secondary-action" disabled={previewBusy} onClick={() => void previewTable(item.schema, item.table)} type="button">Preview rows</button></td></tr>)}</tbody>
+        </table></div>
+      </section>}
       {step === 'connect' && (
         <form className="setup-card setup-form" onSubmit={createProject}>
           <div className="setup-form-grid">
@@ -423,7 +454,7 @@ export function SetupWizard({
           <div className="catalog-list">
             <table className="catalog-table">
               <thead>
-                <tr><th scope="col" /><th scope="col">Table</th><th className="num" scope="col">Approx. rows</th><th className="num" scope="col">Columns</th></tr>
+                <tr><th scope="col" /><th scope="col">Table</th><th className="num" scope="col">Rows</th><th className="num" scope="col">Columns</th><th scope="col">Data</th></tr>
               </thead>
               <tbody>
                 {filteredTables.map((table) => {
@@ -444,8 +475,9 @@ export function SetupWizard({
                         />
                       </td>
                       <td className="mono">{key}</td>
-                      <td className="num mono">{table.approx_rows.toLocaleString()}</td>
+                      <td className="num mono">{table.row_count.toLocaleString()}</td>
                       <td className="num mono">{table.column_count}</td>
+                      <td><button className="secondary-action" disabled={previewBusy} onClick={() => void previewTable(table.schema, table.table)} type="button">Preview rows</button></td>
                     </tr>
                   )
                 })}
@@ -453,6 +485,14 @@ export function SetupWizard({
             </table>
             {filteredTables.length === 0 && <p className="setup-empty">No matching tables found.</p>}
           </div>
+          {preview && <div className="table-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null) }}><section className="setup-card table-preview-dialog" aria-label="Table data preview" aria-modal="true" role="dialog">
+            <div className="setup-actions"><strong>{preview.schema}.{preview.table}</strong><button className="secondary-action" onClick={() => setPreview(null)} type="button">Close preview</button></div>
+            <p className="side-panel-hint">{preview.row_count.toLocaleString()} rows in this table · showing {preview.rows.length} live rows.</p>
+            <div className="catalog-list"><table className="catalog-table"><thead><tr>{preview.columns.map((column, index) => <th className={numericColumn(preview, index) ? 'num' : undefined} key={column} scope="col">{column}</th>)}</tr></thead>
+              <tbody>{preview.rows.map((row, index) => <tr key={index}>{row.map((value, cell) => <td className={`mono${numericColumn(preview, cell) ? ' num' : ''}`} key={cell}>{value == null ? 'NULL' : typeof value === 'object' ? JSON.stringify(value) : String(value)}</td>)}</tr>)}
+                {preview.rows.length === 0 && <tr><td colSpan={preview.columns.length}>This table has no rows.</td></tr>}</tbody></table></div>
+            {preview.truncated && <p className="side-panel-hint">Showing the first 50 rows.</p>}
+          </section></div>}
           <div className="table-pagination">
             <span>{tableTotal} tables · Page {tablePage} of {Math.max(1, Math.ceil(tableTotal / 50))}</span>
             <div>
@@ -519,6 +559,12 @@ export function SetupWizard({
           )}
         </section>
       )}
+      {preview && (step === 'complete' || step === 'relationships') && <div className="table-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null) }}><section className="setup-card table-preview-dialog" aria-label="Table data preview" aria-modal="true" role="dialog">
+        <div className="setup-actions"><strong>{preview.schema}.{preview.table}</strong><button className="secondary-action" onClick={() => setPreview(null)} type="button">Close preview</button></div>
+        <p className="side-panel-hint">{preview.row_count.toLocaleString()} rows in this table · showing {preview.rows.length} live rows.</p>
+        <div className="catalog-list"><table className="catalog-table"><thead><tr>{preview.columns.map((column, index) => <th className={numericColumn(preview, index) ? 'num' : undefined} key={column} scope="col">{column}</th>)}</tr></thead><tbody>{preview.rows.map((row, index) => <tr key={index}>{row.map((value, cell) => <td className={`mono${numericColumn(preview, cell) ? ' num' : ''}`} key={cell}>{value == null ? 'NULL' : typeof value === 'object' ? JSON.stringify(value) : String(value)}</td>)}</tr>)}{preview.rows.length === 0 && <tr><td colSpan={preview.columns.length}>This table has no rows.</td></tr>}</tbody></table></div>
+        {preview.truncated && <p className="side-panel-hint">Showing the first 50 rows.</p>}
+      </section></div>}
     </section>
   )
 }
