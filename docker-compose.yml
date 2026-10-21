@@ -62,7 +62,7 @@ services:
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
       METADATA_DATABASE_URL: postgresql+psycopg://text2sql_app:${METADATA_APP_PASSWORD}@metadata-db:5432/metadata
-      WAREHOUSE_DSN: host=demo-db dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}
+      WAREHOUSE_DSN: "host=demo-db port=5432 dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}"
       WAREHOUSE_STATEMENT_TIMEOUT_MS: ${WAREHOUSE_STATEMENT_TIMEOUT_MS:-10000}
       WAREHOUSE_MAX_ROWS: ${WAREHOUSE_MAX_ROWS:-1000}
       JWT_SECRET: ${JWT_SECRET:-}
@@ -76,6 +76,10 @@ services:
       LOGIN_LOCKOUT_SECONDS: ${LOGIN_LOCKOUT_SECONDS:-900}
       SQL_MODEL: ${SQL_MODEL:-llama3:latest}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text:latest}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-text2sql}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
     ports:
       - "${API_HOST_PORT:-8000}:8000"
     depends_on:
@@ -84,7 +88,11 @@ services:
       demo-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "__import__('urllib.request').request.urlopen('http://127.0.0.1:8000/health')"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "__import__('urllib.request').request.urlopen('http://127.0.0.1:8000/health')"
       interval: 10s
       timeout: 3s
       retries: 10
@@ -105,6 +113,10 @@ services:
       SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-15}
       SCHEDULER_LEASE_SECONDS: ${SCHEDULER_LEASE_SECONDS:-300}
       SCHEDULER_WORKER_ID: ${SCHEDULER_WORKER_ID:-}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-text2sql}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
     depends_on:
       metadata-db:
         condition: service_healthy
@@ -157,8 +169,8 @@ services:
     profiles: ["test"]
     command: ["uv", "run", "--no-sync", "pytest", "-q"]
     environment:
-      WAREHOUSE_DSN: host=demo-db dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}
-      METADATA_APP_DSN: host=metadata-db dbname=metadata user=text2sql_app password=${METADATA_APP_PASSWORD}
+      WAREHOUSE_DSN: "host=demo-db port=5432 dbname=demo user=warehouse_reader password=${WAREHOUSE_READER_PASSWORD}"
+      METADATA_APP_DSN: "host=metadata-db port=5432 dbname=metadata user=text2sql_app password=${METADATA_APP_PASSWORD}"
     depends_on:
       metadata-db:
         condition: service_healthy

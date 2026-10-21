@@ -85,6 +85,7 @@ day9: check redteam rls drills e2e offline eval
 # docs/RUNBOOK.md and `sh scripts/ldap/make-certs.sh`).
 COMPOSE = docker compose --env-file .env -f docker-compose.yml \
 	$(if $(GPU),-f docker-compose.gpu.yml) \
+	$(if $(LANGSMITH),-f docker-compose.langsmith.yml) \
 	$(if $(IDENTITY),-f docker-compose.ldap.yml -f docker-compose.oidc.yml --profile identity-demo)
 SQL_MODEL_NAME = $(shell sed -n 's/^SQL_MODEL=//p' .env)
 EMBEDDING_MODEL_NAME = $(shell sed -n 's/^EMBEDDING_MODEL=//p' .env)

@@ -1,0 +1,5 @@
+# Opt-in overlay for sending LangGraph traces to hosted LangSmith.
+# The API and worker need outbound network access to reach the LangSmith endpoint.
+networks:
+  local:
+    internal: false

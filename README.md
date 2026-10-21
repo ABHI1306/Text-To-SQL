@@ -3,8 +3,9 @@
 A local-first Text-to-SQL platform for PostgreSQL. A user asks a question in plain language;
 a local LLM (Ollama) writes logical SQL over a semantic model, a compiler turns it into
 PostgreSQL SQL with row-level security applied, a validator checks it, and the rows come
-back with a step timeline, charts and a summary. Everything runs on your own machine:
-no data or prompts leave it. Only PostgreSQL is supported as a data source.
+back with a step timeline, charts and a summary. Everything runs on your own machine by default;
+optional LangSmith tracing sends graph run data to LangSmith when enabled. Only PostgreSQL is
+supported as a data source.
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md): deploy, re-index, rotate keys, roles, LDAP and OIDC, schedules, DBA reset
 - [docs/DEMO.md](docs/DEMO.md): a 10-minute demo script
@@ -74,6 +75,19 @@ the internet.
 `nomic-embed-text:latest`) powers retrieval, and the optional `SMALL_MODEL` handles routing
 steps and falls back to `SQL_MODEL`. If you change them in `.env`, run `make models` again.
 Do not use a model whose name ends in `-cloud`: it sends inference to an external service.
+
+### Optional LangSmith tracing
+
+The question pipeline uses LangGraph and can send traces to LangSmith. Tracing is off by default.
+Create an API key and project in LangSmith, then set `LANGSMITH_TRACING=true`,
+`LANGSMITH_API_KEY`, and optionally `LANGSMITH_PROJECT` in `.env`. Traces include graph inputs
+and outputs, which can contain user questions, schema context, generated SQL, and result summaries.
+Enable this only if your data handling policy allows sending that information to LangSmith.
+
+The Compose network blocks outbound connections by default. Set the API key and
+`LANGSMITH_TRACING=true` in `.env`, then run `make down` followed by `make up LANGSMITH=1` to use
+the LangSmith network overlay. This permits outbound network access for containers on that network.
+To return to local-only operation, run `make down` and `make up` without `LANGSMITH=1`.
 
 ### 3. Start the UI
 
