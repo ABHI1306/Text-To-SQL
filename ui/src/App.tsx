@@ -946,7 +946,7 @@ function App() {
           </div>
           </main>
         ) : activePage === 'Setup' || activePage === 'Connect and model' ? (
-          <main className="placeholder-main">
+          <main className={activePage === 'Setup' ? 'placeholder-main setup-main' : 'placeholder-main'}>
           <header className="workspace-topbar">
             <div className="breadcrumbs"><strong>{selectedProject}</strong><span>/</span><span>{activePage}</span></div>
             <div className="topbar-actions">
